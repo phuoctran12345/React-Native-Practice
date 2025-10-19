@@ -190,6 +190,11 @@ export class ThreeJSGLTFLoader {
       const textureAssets = await this.preloadTextureAssets();
       console.log(`✅ Preloaded ${textureAssets.length} texture files`);
       
+      // ✅ FALLBACK STRATEGY: Nếu không load được textures, vẫn load GLTF
+      if (textureAssets.length === 0) {
+        console.warn(`⚠️ No textures loaded, will use GLTF without custom textures`);
+      }
+      
       console.log(`🔄 Loading GLTF with expo-three: ${assetUri}`);
       const gltfData = await loadAsync(assetUri);
       
@@ -200,9 +205,11 @@ export class ThreeJSGLTFLoader {
         animations: gltfData.animations?.length || 0,
       });
       
-      // ✅ APPLY PRELOADED TEXTURES TO MATERIALS
-      if (gltfData.scene) {
+      // ✅ APPLY PRELOADED TEXTURES TO MATERIALS (chỉ khi có textures)
+      if (gltfData.scene && textureAssets.length > 0) {
         await this.applyPreloadedTextures(gltfData.scene, textureAssets);
+      } else if (gltfData.scene) {
+        console.log(`⚠️ No custom textures to apply, using GLTF default textures`);
       }
       
       return gltfData;
@@ -224,15 +231,15 @@ export class ThreeJSGLTFLoader {
       const staticTextureEntries: Array<{ name: string; asset: Asset }> = [
         {
           name: 'Eye.002_baseColor',
-          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Eye.002_baseColor.png')),
+          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Eye.002_baseColor.png')),
         },
         {
           name: 'Mouth.002_baseColor',
-          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png')),
+          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png')),
         },
         {
           name: 'Wing_baseColor',
-          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Wing_baseColor.png')),
+          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Wing_baseColor.png')),
         },
       ];
 
@@ -294,6 +301,8 @@ export class ThreeJSGLTFLoader {
           });
         } catch (error) {
           console.warn(`⚠️ Failed to load texture ${entry.name}:`, error);
+          console.warn(`⚠️ Texture path: ${entry.asset.uri || 'unknown'}`);
+          console.warn(`⚠️ Local URI: ${entry.asset.localUri || 'unknown'}`);
         }
       }
       
