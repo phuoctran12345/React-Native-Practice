@@ -227,15 +227,30 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         try {
           // ✅ SỬ DỤNG THREE.JS GLTFLOADER CHO 100% CHÍNH XÁC
           console.log(`🎯 Using Three.js GLTFLoader for 100% accuracy`);
-          const loadedModel = await threeJSGLTFLoader.loadModel(glbConfig);
+          setLoadingProgress(40);
+          setModelInfo(`Đang tải model ${glbConfig.name}...`);
+          
+          // ✅ THÊM TIMEOUT CHO TEXTURE LOADING
+          const loadPromise = threeJSGLTFLoader.loadModel(glbConfig);
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Loading timeout after 15 seconds')), 15000)
+          );
+          
+          const loadedModel = await Promise.race([loadPromise, timeoutPromise]) as THREE.Object3D;
           
           // Apply config settings
           if (glbConfig.scale) {
             loadedModel.scale.setScalar(glbConfig.scale);
           }
           
+          setLoadingProgress(70);
+          setModelInfo(`Đang áp dụng cài đặt...`);
+          
           // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
           loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
+          
+          setLoadingProgress(85);
+          setModelInfo(`Đang tối ưu materials...`);
           
           // ✅ GIỮ NGUYÊN MÀU SẮC GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
           loadedModel.traverse((child: any) => {
@@ -280,8 +295,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           (loadedModel as any).animate = breathingAnimation;
           
-          setLoadingProgress(90);
-          setModelInfo(`✅ ${glbConfig.name} đã tải thành công!`);
+          setLoadingProgress(95);
+          setModelInfo(`Đang thêm vào scene...`);
+          
+          setLoadingProgress(100);
+          setModelInfo(`✅ ${glbConfig.name} đã sẵn sàng!`);
           console.log('🚀 Pokemon model loaded successfully:', glbConfig.name);
           
         } catch (glbError) {

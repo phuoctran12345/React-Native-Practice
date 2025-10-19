@@ -253,19 +253,34 @@ export class ThreeJSGLTFLoader {
           }
 
           console.log(`🎨 Loading texture: ${entry.name}`);
-          await entry.asset.downloadAsync();
+          
+          // ✅ THÊM TIMEOUT CHO TEXTURE DOWNLOAD
+          const downloadPromise = entry.asset.downloadAsync();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Texture download timeout: ${entry.name}`)), 5000)
+          );
+          
+          await Promise.race([downloadPromise, timeoutPromise]);
 
-          // Create Three.js texture
+          // Create Three.js texture với timeout
           const loader = new THREE.TextureLoader();
           const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+            const textureTimeout = setTimeout(() => {
+              reject(new Error(`Texture load timeout: ${entry.name}`));
+            }, 3000);
+            
             loader.load(
               entry.asset.localUri!,
               (t) => {
+                clearTimeout(textureTimeout);
                 console.log(`✅ Texture loaded: ${entry.name}`);
                 resolve(t);
               },
               undefined,
-              reject
+              (error) => {
+                clearTimeout(textureTimeout);
+                reject(error);
+              }
             );
           });
 
