@@ -277,6 +277,10 @@ export class ThreeJSGLTFLoader {
           
           await Promise.race([downloadPromise, timeoutPromise]);
 
+          // ✅ FIX: Dùng Asset URI thay vì localUri cho THREE.TextureLoader
+          const textureUri = entry.asset.uri || entry.asset.localUri;
+          console.log(`🔍 Using texture URI: ${textureUri}`);
+          
           // Create Three.js texture với timeout
           const loader = new THREE.TextureLoader();
           const texture = await new Promise<THREE.Texture>((resolve, reject) => {
@@ -285,7 +289,7 @@ export class ThreeJSGLTFLoader {
             }, 3000);
             
             loader.load(
-              entry.asset.localUri!,
+              textureUri!,
               (t) => {
                 clearTimeout(textureTimeout);
                 console.log(`✅ Texture loaded: ${entry.name}`);
@@ -294,6 +298,7 @@ export class ThreeJSGLTFLoader {
               undefined,
               (error) => {
                 clearTimeout(textureTimeout);
+                console.error(`❌ TextureLoader error for ${entry.name}:`, error);
                 reject(error);
               }
             );
@@ -311,6 +316,17 @@ export class ThreeJSGLTFLoader {
           console.warn(`⚠️ Failed to load texture ${entry.name}:`, error);
           console.warn(`⚠️ Texture path: ${entry.asset.uri || 'unknown'}`);
           console.warn(`⚠️ Local URI: ${entry.asset.localUri || 'unknown'}`);
+          
+          // ✅ FALLBACK: Tạo texture đơn giản thay vì skip
+          console.log(`🔄 Creating fallback texture for ${entry.name}`);
+          const fallbackTexture = new THREE.Texture();
+          fallbackTexture.name = entry.name;
+          
+          textureAssets.push({
+            name: entry.name,
+            asset: entry.asset,
+            texture: fallbackTexture,
+          });
         }
       }
       
