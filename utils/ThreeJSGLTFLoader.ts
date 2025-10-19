@@ -234,15 +234,15 @@ export class ThreeJSGLTFLoader {
       const staticTextureEntries: Array<{ name: string; asset: Asset }> = [
         {
           name: 'Eye.002_baseColor',
-          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Eye.002_baseColor.png')),
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Eye.002_baseColor.png')),
         },
         {
           name: 'Mouth.002_baseColor',
-          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png')),
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png')),
         },
         {
           name: 'Wing_baseColor',
-          asset: Asset.fromModule(require('../../assets/models/pokemon_concua/textures/Wing_baseColor.png')),
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Wing_baseColor.png')),
         },
       ];
 
