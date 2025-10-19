@@ -388,26 +388,26 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       pointLight.position.set(0, 2, 5);
       scene.add(pointLight);
 
-      // ✅ ANIMATION LOOP - CẢI THIỆN!
+      // ✅ ANIMATION LOOP - TỐI ƯU HIỆU SUẤT!
       const animate = () => {
-        timeoutRef.current = setTimeout(animate, 1000 / 60);
+        timeoutRef.current = setTimeout(animate, 1000 / 30); // ✅ GIẢM TỪ 60 FPS → 30 FPS
 
         if (modelRef.current) {
           const time = Date.now() * 0.001;
           
-          // ✅ BREATHING ANIMATION CHO TẤT CẢ MODEL
+          // ✅ BREATHING ANIMATION - TỐI ƯU!
           if ((modelRef.current as any).animate) {
             (modelRef.current as any).animate();
           } else {
-            // Fallback breathing animation
+            // ✅ GIẢM TÍNH TOÁN - CHỈ KHI CẦN THIẾT
             const originalScale = (modelRef.current as any).originalScale || 1;
-            const breathingScale = originalScale + Math.sin(time * 2) * 0.08;
+            const breathingScale = originalScale + Math.sin(time * 1.5) * 0.05; // ✅ GIẢM FREQUENCY
             modelRef.current.scale.setScalar(breathingScale);
           }
           
-          // ✅ TỰ ĐỘNG XOAY CHẬM (OPTIONAL)
+          // ✅ TỰ ĐỘNG XOAY - GIẢM TỐC ĐỘ
           if (!(modelRef.current as any).isUserRotating) {
-            modelRef.current.rotation.y += 0.02; // Tăng tốc độ auto rotation
+            modelRef.current.rotation.y += 0.01; // ✅ GIẢM TỪ 0.02 → 0.01
           }
           
           // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN

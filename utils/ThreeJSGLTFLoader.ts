@@ -6,6 +6,7 @@ import { loadAsync } from 'expo-three';
 // Custom Three.js GLTFLoader for React Native
 export class ThreeJSGLTFLoader {
   private loadedModels: Map<string, THREE.Object3D> = new Map();
+  private textureCache: Map<string, THREE.Texture> = new Map(); // ✅ CACHE TEXTURES
   
   constructor() {
     console.log('🔧 Three.js GLTFLoader initialized for React Native');
@@ -239,6 +240,18 @@ export class ThreeJSGLTFLoader {
 
       for (const entry of staticTextureEntries) {
         try {
+          // ✅ CHECK CACHE TRƯỚC KHI LOAD
+          if (this.textureCache.has(entry.name)) {
+            console.log(`🎨 Using cached texture: ${entry.name}`);
+            const cachedTexture = this.textureCache.get(entry.name)!;
+            textureAssets.push({
+              name: entry.name,
+              asset: entry.asset,
+              texture: cachedTexture,
+            });
+            continue;
+          }
+
           console.log(`🎨 Loading texture: ${entry.name}`);
           await entry.asset.downloadAsync();
 
@@ -255,6 +268,9 @@ export class ThreeJSGLTFLoader {
               reject
             );
           });
+
+          // ✅ CACHE TEXTURE
+          this.textureCache.set(entry.name, texture);
 
           textureAssets.push({
             name: entry.name,
@@ -292,16 +308,11 @@ export class ThreeJSGLTFLoader {
             );
             
             if (matchingTexture && matchingTexture.texture) {
+              // ✅ GIẢM LOG SPAM - CHỈ LOG KHI CẦN THIẾT
               console.log(`🎨 Applying texture ${matchingTexture.name} to material ${material.name}`);
               
               // Apply texture to material
-              if (material.map) {
-                material.map = matchingTexture.texture;
-              } else {
-                material.map = matchingTexture.texture;
-              }
-              
-              // Ensure material updates
+              material.map = matchingTexture.texture;
               material.needsUpdate = true;
             }
           }
