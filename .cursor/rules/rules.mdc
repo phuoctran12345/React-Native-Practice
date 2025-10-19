@@ -1,0 +1,4 @@
+luôn luôn làm sạch log - chỉ để những cái log cần thiết và quan trọng 
+
+chạy cho đúng file thiết kế gốc 
+không hardcode - viết sao cho đây là process scale nhiều file .glb 3d khác -> mở rộng dự án với các chức năng chính như xoay 360 độ - animation được define trong .glb 

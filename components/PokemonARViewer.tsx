@@ -31,7 +31,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const handleTouchStart = (event: any) => {
     const touch = event.nativeEvent.touches[0];
     setTouchStart({ x: touch.pageX, y: touch.pageY });
-    console.log(`🔄 Touch started at:`, { x: touch.pageX, y: touch.pageY });
   };
   
   const handleTouchMove = (event: any) => {
@@ -46,13 +45,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     
     // ✅ XOAY TRỰC TIẾP THEO TOUCH
     modelRef.current.rotation.y += deltaX * rotationSpeed;
-    
-    console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
   };
   
   const handleTouchEnd = () => {
     setTouchStart(null);
-    console.log(`🔄 Touch ended`);
   };
 
   const onHandlerStateChange = (event: any) => {
@@ -93,13 +89,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   // Tạo fallback model khi load thất bại
   const createFallbackModel = (config: any) => {
-    console.log(`🔄 Creating fallback model for ${config.name}`);
-    
     const group = new THREE.Group();
     
     if (config.id.includes('scizor')) {
       // Tạo Scizor-like fallback
-      console.log(`🦂 Creating Scizor-like fallback`);
       
       // Body (màu đỏ)
       const bodyGeometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 8);
@@ -144,13 +137,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     (group as any).source = 'pokemon-fallback';
     (group as any).originalScale = config.scale || 1;
     
-    console.log(`✅ Fallback model created for: ${config.name}`);
     return group;
   };
 
   // Handle QR Code scan
   const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
-    console.log('🔍 QR Code scanned:', data);
     setScannedData(data);
     loadPokemonModel(data);
   };
@@ -166,7 +157,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const glbConfig = getGLBModelFromQRData(qrData);
       
       if (glbConfig) {
-        console.log(`🎮 Loading Pokemon model: ${glbConfig.name}`);
         setModelInfo(`Đang tải ${glbConfig.name}...`);
         setLoadingProgress(30);
         
@@ -181,26 +171,14 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
           loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
-          console.log(`📍 Model positioned at: (0, -0.5, 0)`);
           
           // ✅ GIỮ NGUYÊN THIẾT KẾ GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
           loadedModel.traverse((child: any) => {
             if (child.isMesh && child.material) {
-              console.log(`🎨 Found mesh:`, child.name, 'Material type:', child.material.type);
-              
               // Chỉ đảm bảo material hoạt động, không thay đổi màu sắc
               child.material.needsUpdate = true;
               child.castShadow = true;
               child.receiveShadow = true;
-              
-              // Log material info để debug
-              console.log(`📊 Material info:`, {
-                name: child.name,
-                type: child.material.type,
-                color: child.material.color,
-                map: child.material.map,
-                transparent: child.material.transparent
-              });
             }
           });
           
@@ -217,20 +195,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ ADD MODEL VÀO SCENE - QUAN TRỌNG!
           if (sceneRef.current) {
             sceneRef.current.add(loadedModel);
-            console.log(`✅ Model added to scene successfully!`);
-            console.log(`📊 Model position:`, {
-              x: loadedModel.position.x,
-              y: loadedModel.position.y,
-              z: loadedModel.position.z
-            });
-            console.log(`📊 Model scale:`, loadedModel.scale.x);
-            console.log(`📊 Model rotation:`, {
-              x: loadedModel.rotation.x,
-              y: loadedModel.rotation.y,
-              z: loadedModel.rotation.z
-            });
-          } else {
-            console.log(`❌ Scene not available yet, model will be added later`);
           }
           
           // Store original scale for animation
@@ -253,20 +217,16 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           setLoadingProgress(90);
           setModelInfo(`✅ ${glbConfig.name} đã tải thành công!`);
           
-          console.log(`✅ Pokemon model loaded: ${glbConfig.name}`);
-          
         } catch (glbError) {
           console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
           setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
           
           // Tạo fallback model thay vì show error
-          console.log(`🔄 Creating fallback model for ${glbConfig.name}`);
           const fallbackModel = createFallbackModel(glbConfig);
           modelRef.current = fallbackModel;
           
           if (sceneRef.current) {
             sceneRef.current.add(fallbackModel);
-            console.log(`✅ Fallback model added to scene`);
           }
           
           setLoadingProgress(90);
@@ -313,7 +273,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ Nếu model đã được load trước đó, add vào scene ngay
       if (modelRef.current) {
         scene.add(modelRef.current);
-        console.log(`✅ Adding existing model to new scene`);
       }
       
       const camera = new THREE.PerspectiveCamera(
@@ -372,7 +331,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ TỰ ĐỘNG XOAY CHẬM (OPTIONAL)
           if (!(modelRef.current as any).isUserRotating) {
             modelRef.current.rotation.y += 0.02; // Tăng tốc độ auto rotation
-            console.log(`🤖 Auto rotation: ${modelRef.current.rotation.y}`);
           }
           
           // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN
@@ -387,7 +345,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // Nếu model quá xa, đưa về gần camera
           if (distance > 5) {
             modelRef.current.position.set(0, 0, 0);
-            console.log(`📍 Model repositioned to center`);
           }
         }
 
