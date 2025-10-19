@@ -50,7 +50,9 @@ export class DynamicGLBLoader {
       }
       
       // Parse GLB file (dùng GLTFLoader thật)
+      console.log(`🔄 Parsing GLB/GLTF file: ${assetUri}`);
       const model = await this.parseGLB(assetUri, config);
+      console.log(`✅ Model parsed successfully: ${config.name}`);
       
       // Cache model
       this.loadedModels.set(config.id, model);

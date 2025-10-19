@@ -224,6 +224,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
         } catch (glbError) {
           console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
+          console.error(`❌ Error details:`, {
+            message: (glbError as Error).message,
+            stack: (glbError as Error).stack,
+            config: glbConfig
+          });
           setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
           
           // Tạo fallback model thay vì show error

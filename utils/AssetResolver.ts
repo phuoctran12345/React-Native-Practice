@@ -39,6 +39,10 @@ export class AssetResolver {
       } else if (filePath.includes('pokemon_concua/scene.gltf')) {
         console.log(`📁 Loading scene.gltf from pokemon_concua bundle`);
         asset = Asset.fromModule(require('../assets/models/pokemon_concua/scene.gltf'));
+        console.log(`📁 Also loading scene.bin for GLTF support`);
+        // Load scene.bin as well for GLTF support
+        const binAsset = Asset.fromModule(require('../assets/models/pokemon_concua/scene.bin'));
+        await binAsset.downloadAsync();
       } else if (filePath.includes('scene.gltf')) {
         console.log(`📁 Loading scene.gltf from root bundle`);
         asset = Asset.fromModule(require('../assets/models/scene.gltf'));
