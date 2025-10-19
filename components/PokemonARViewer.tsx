@@ -307,8 +307,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           console.error(`❌ Error details:`, {
             message: (glbError as Error).message,
             stack: (glbError as Error).stack,
-            config: glbConfig
+            config: glbConfig,
+            filePath: glbConfig.filePath
           });
+          console.error(`❌ Full error object:`, glbError);
           setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
           
           // Tạo fallback model thay vì show error

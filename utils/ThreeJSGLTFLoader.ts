@@ -226,6 +226,9 @@ export class ThreeJSGLTFLoader {
     try {
       console.log(`🎨 Loading texture assets for accurate colors`);
       
+      // ✅ DEBUG: Kiểm tra texture files có tồn tại không
+      console.log(`🔍 Checking texture files...`);
+      
       // ✅ Metro bundler KHÔNG CHO PHÉP require() với biến động.
       //    Dùng map tĩnh tới từng file texture.
       const staticTextureEntries: Array<{ name: string; asset: Asset }> = [
@@ -247,6 +250,11 @@ export class ThreeJSGLTFLoader {
 
       for (const entry of staticTextureEntries) {
         try {
+          // ✅ DEBUG: Log asset info
+          console.log(`🔍 Processing texture: ${entry.name}`);
+          console.log(`🔍 Asset URI: ${entry.asset.uri}`);
+          console.log(`🔍 Asset localUri: ${entry.asset.localUri}`);
+          
           // ✅ CHECK CACHE TRƯỚC KHI LOAD
           if (this.textureCache.has(entry.name)) {
             console.log(`🎨 Using cached texture: ${entry.name}`);
