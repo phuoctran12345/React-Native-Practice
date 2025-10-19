@@ -22,6 +22,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelRef = useRef<THREE.Object3D | null>(null);
   const rotationRef = useRef({ x: 0, y: 0 });
+  const sceneRef = useRef<THREE.Scene | null>(null);
   const [scannedData, setScannedData] = useState<string | null>(null);
 
   // Gesture handler cho vuốt trái/phải
@@ -112,6 +113,25 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           modelRef.current = loadedModel;
           
+          // ✅ ADD MODEL VÀO SCENE - QUAN TRỌNG!
+          if (sceneRef.current) {
+            sceneRef.current.add(loadedModel);
+            console.log(`✅ Model added to scene successfully!`);
+            console.log(`📊 Model position:`, {
+              x: loadedModel.position.x,
+              y: loadedModel.position.y,
+              z: loadedModel.position.z
+            });
+            console.log(`📊 Model scale:`, loadedModel.scale.x);
+            console.log(`📊 Model rotation:`, {
+              x: loadedModel.rotation.x,
+              y: loadedModel.rotation.y,
+              z: loadedModel.rotation.z
+            });
+          } else {
+            console.log(`❌ Scene not available yet, model will be added later`);
+          }
+          
           // Store original scale for animation
           (loadedModel as any).originalScale = glbConfig.scale || 1;
           
@@ -178,6 +198,14 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     try {
       // Thiết lập Scene, Camera, Renderer
       const scene = new THREE.Scene();
+      sceneRef.current = scene; // Lưu scene reference
+      
+      // ✅ Nếu model đã được load trước đó, add vào scene ngay
+      if (modelRef.current) {
+        scene.add(modelRef.current);
+        console.log(`✅ Adding existing model to new scene`);
+      }
+      
       const camera = new THREE.PerspectiveCamera(
         75,
         gl.drawingBufferWidth / gl.drawingBufferHeight,

@@ -46,7 +46,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     name: 'Scizor (Pokemon Concua)',
     filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb',
     scale: 1.2,
-    position: { x: 0, y: -0.3, z: 0 },
+    position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
   },
