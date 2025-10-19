@@ -27,26 +27,17 @@ export class AssetResolver {
       }
 
       // Resolve asset dựa trên file path
-      let asset: Asset;
+      // ✅ DYNAMIC ASSET RESOLVER - KHÔNG HARDCODE!
+      console.log(`🔄 Dynamic asset resolution for: ${filePath}`);
       
-      if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
-        // Pokemon Scizor từ pokemon_concua
-        console.log(`🦂 Resolving Pokemon Scizor from pokemon_concua`);
-        asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
-        
-      } else if (filePath.includes('scene.gltf')) {
-        // Scene GLTF
-        console.log(`📁 Resolving scene.gltf`);
-        asset = Asset.fromModule(require('../assets/models/scene.gltf'));
-        
-      } else if (filePath.includes('pokemon_scizor.glb')) {
-        // Pokemon Scizor từ root models
-        console.log(`🦂 Resolving Pokemon Scizor from root models`);
-        asset = Asset.fromModule(require('../assets/models/pokemon_scizor.glb'));
-        
-      } else {
-        throw new Error(`Unsupported asset: ${filePath}`);
-      }
+      // Tạo asset từ file path dynamic
+      const asset = new Asset({
+        name: filePath.split('/').pop() || 'model',
+        type: filePath.endsWith('.glb') ? 'glb' : 
+              filePath.endsWith('.gltf') ? 'gltf' : 
+              filePath.endsWith('.bin') ? 'bin' : 'unknown',
+        uri: filePath,
+      });
       
       // Download asset
       await asset.downloadAsync();
