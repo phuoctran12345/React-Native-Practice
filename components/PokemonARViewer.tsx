@@ -65,9 +65,12 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ ĐÁNH DẤU USER ĐANG XOAY
       (modelRef.current as any).isUserRotating = true;
       
-      // ✅ XOAY 360 ĐỘ THEO CẢ X VÀ Y
+      // ✅ XOAY 360 ĐỘ THEO CẢ X VÀ Y - FIX
       modelRef.current.rotation.y += deltaX * rotationSpeed;
-      modelRef.current.rotation.x += deltaY * rotationSpeed * 0.5; // Xoay theo chiều dọc nhẹ hơn
+      modelRef.current.rotation.x += deltaY * rotationSpeed * 0.3; // Giảm tốc độ xoay dọc
+      
+      // ✅ GIỚI HẠN ROTATION X ĐỂ KHÔNG BỊ LẬT NGƯỢC
+      modelRef.current.rotation.x = Math.max(-Math.PI/3, Math.min(Math.PI/3, modelRef.current.rotation.x));
       
       // ✅ CẬP NHẬT TOUCH START ĐỂ XOAY MƯỢT
       setTouchStart({ x: touch.pageX, y: touch.pageY });
@@ -78,11 +81,16 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const scale = currentDistance / initialDistance;
       const newScale = currentScale * scale;
       
-      // ✅ GIỚI HẠN ZOOM (0.5x đến 3x)
-      const clampedScale = Math.max(0.5, Math.min(3, newScale));
-      const originalScale = (modelRef.current as any).originalScale || 0.025;
+      // ✅ GIỚI HẠN ZOOM (0.3x đến 2x) - MOBILE FRIENDLY
+      const clampedScale = Math.max(0.3, Math.min(2, newScale));
+      const originalScale = (modelRef.current as any).originalScale || 0.03;
       
-      modelRef.current.scale.setScalar(originalScale * clampedScale);
+      // ✅ SMOOTH SCALING
+      const targetScale = originalScale * clampedScale;
+      modelRef.current.scale.setScalar(targetScale);
+      
+      console.log(`🔍 Zoom: ${clampedScale.toFixed(2)}x, Scale: ${targetScale.toFixed(3)}`);
+      
       setCurrentScale(clampedScale);
       setInitialDistance(currentDistance);
     }
@@ -350,30 +358,29 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       camera.position.set(0, 0, 6); // Khoảng cách vừa phải
       camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
 
-      // ✅ ÁNH SÁNG MẠNH HƠN - SỬA LỖI MODEL ĐEN!
-      // Ambient light mạnh hơn để đảm bảo model không bị đen
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+      // ✅ ÁNH SÁNG TỐI ƯU CHO TEXTURE GLTF!
+      // Ambient light vừa phải để không làm mất chi tiết
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
       scene.add(ambientLight);
 
-      // Directional light chính từ trên xuống - MẠNH HƠN
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-      directionalLight.position.set(0, 10, 5);
+      // Directional light chính - không quá mạnh
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(2, 5, 3);
       directionalLight.castShadow = true;
       scene.add(directionalLight);
 
-      // Ánh sáng phụ từ bên trái - MẠNH HƠN
-      const leftLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      leftLight.position.set(-5, 5, 5);
+      // Ánh sáng từ nhiều góc để hiển thị texture đúng
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.4);
+      leftLight.position.set(-3, 2, 2);
       scene.add(leftLight);
 
-      // Ánh sáng phụ từ bên phải - MẠNH HƠN
-      const rightLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      rightLight.position.set(5, 5, 5);
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.4);
+      rightLight.position.set(3, 2, 2);
       scene.add(rightLight);
       
-      // Thêm point light để chiếu sáng toàn diện
-      const pointLight = new THREE.PointLight(0xffffff, 1.0, 100);
-      pointLight.position.set(0, 0, 10);
+      // Point light nhẹ để tạo độ sáng tự nhiên
+      const pointLight = new THREE.PointLight(0xffffff, 0.3, 50);
+      pointLight.position.set(0, 2, 5);
       scene.add(pointLight);
 
       // ✅ ANIMATION LOOP - CẢI THIỆN!
