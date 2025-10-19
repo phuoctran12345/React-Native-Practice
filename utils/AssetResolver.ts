@@ -34,7 +34,7 @@ export class AssetResolver {
       
       // ✅ LOAD TỪ BUNDLE - KHÔNG HARDCODE!
       if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
-        console.log(`🦂 Loading Pokemon Scizor from pokemon_concua bundle`);
+        console.log(`🦂 Loading Pokemon Scizor GLB from pokemon_concua bundle`);
         asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
       } else if (filePath.includes('pokemon_concua/scene.gltf')) {
         console.log(`📁 Loading scene.gltf from pokemon_concua bundle`);
@@ -43,18 +43,6 @@ export class AssetResolver {
         console.log(`📁 Also loading scene.bin for GLTF support`);
         const binAsset = Asset.fromModule(require('../assets/models/pokemon_concua/scene.bin'));
         await binAsset.downloadAsync();
-        
-        console.log(`🎨 Loading texture files for colors`);
-        // Load texture files for proper colors
-        const eyeTexture = Asset.fromModule(require('../assets/models/pokemon_concua/textures/Eye.002_baseColor.png'));
-        const mouthTexture = Asset.fromModule(require('../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png'));
-        const wingTexture = Asset.fromModule(require('../assets/models/pokemon_concua/textures/Wing_baseColor.png'));
-        
-        await Promise.all([
-          eyeTexture.downloadAsync(),
-          mouthTexture.downloadAsync(),
-          wingTexture.downloadAsync()
-        ]);
       } else if (filePath.includes('scene.gltf')) {
         console.log(`📁 Loading scene.gltf from root bundle`);
         asset = Asset.fromModule(require('../assets/models/scene.gltf'));

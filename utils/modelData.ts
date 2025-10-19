@@ -35,7 +35,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
   'scizor': {
     id: 'scizor',
     name: 'Scizor',
-    filePath: 'assets/models/pokemon_concua/scene.gltf', // ✅ DÙNG GLTF ĐỂ LOAD TEXTURES ĐÚNG
+    filePath: 'assets/models/pokemon_concua/scene.gltf', // ✅ DÙNG GLTF VỚI THREE.JS GLTFLOADER - 100% CHÍNH XÁC
     scale: 0.03, // ✅ TĂNG SCALE ĐỂ THẤY RÕ HƠN
     position: { x: 0, y: -0.5, z: 0 }, // ✅ HẠ XUỐNG PHÍA DƯỚI
     rotation: { x: 0, y: 0, z: 0 },

@@ -6,6 +6,7 @@ import { Renderer } from 'expo-three';
 import * as THREE from 'three';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import { glbLoader, GLBModelConfig } from '../utils/DynamicGLBLoader';
+import { threeJSGLTFLoader } from '../utils/ThreeJSGLTFLoader';
 import { getGLBModelFromQRData } from '../utils/modelData';
 
 interface PokemonARViewerProps {
@@ -221,8 +222,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         setLoadingProgress(30);
         
         try {
-          // Load model bằng Dynamic GLB Loader với fallback
-          const loadedModel = await glbLoader.loadModel(glbConfig);
+          // ✅ SỬ DỤNG THREE.JS GLTFLOADER CHO 100% CHÍNH XÁC
+          console.log(`🎯 Using Three.js GLTFLoader for 100% accuracy`);
+          const loadedModel = await threeJSGLTFLoader.loadModel(glbConfig);
           
           // Apply config settings
           if (glbConfig.scale) {

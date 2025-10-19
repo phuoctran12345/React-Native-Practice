@@ -190,10 +190,18 @@ export class DynamicGLBLoader {
       
       let gltfData;
       try {
+        console.log(`🔄 Calling expo-three loadAsync for: ${assetUri}`);
         gltfData = await loadAsync(assetUri);
+        console.log(`✅ expo-three loadAsync completed successfully`);
       } catch (loadError) {
-        console.error(`❌ loadAsync failed:`, loadError);
-        throw new Error(`Failed to load 3D model: ${(loadError as Error).message}`);
+        console.error(`❌ expo-three loadAsync failed:`, loadError);
+        console.error(`❌ LoadError details:`, {
+          message: (loadError as Error).message,
+          stack: (loadError as Error).stack,
+          assetUri,
+          fileType: assetUri.includes('.glb') ? 'GLB' : 'GLTF'
+        });
+        throw new Error(`expo-three failed to load ${assetUri.includes('.glb') ? 'GLB' : 'GLTF'} file: ${(loadError as Error).message}`);
       }
       
       console.log(`✅ GLTF data loaded successfully!`);
