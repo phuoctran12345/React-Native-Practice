@@ -186,28 +186,50 @@ export class DynamicGLBLoader {
       }
       
       console.log(`✅ File exists: ${assetUri}`);
-      const gltfData = await loadAsync(assetUri);
+      console.log(`🔄 Attempting to parse with expo-three loadAsync...`);
       
-      console.log(`✅ GLTF data loaded:`, {
+      let gltfData;
+      try {
+        gltfData = await loadAsync(assetUri);
+      } catch (loadError) {
+        console.error(`❌ loadAsync failed:`, loadError);
+        throw new Error(`Failed to load 3D model: ${(loadError as Error).message}`);
+      }
+      
+      console.log(`✅ GLTF data loaded successfully!`);
+      console.log(`📊 GLTF data structure:`, {
         hasScene: !!gltfData.scene,
         hasScenes: !!gltfData.scenes,
         type: typeof gltfData,
+        keys: Object.keys(gltfData || {}),
+        sceneType: gltfData.scene?.type,
+        sceneChildren: gltfData.scene?.children?.length || 0,
       });
       
       // Extract scene from GLTF data
       let scene: THREE.Object3D;
       if (gltfData.scene) {
         scene = gltfData.scene;
+        console.log(`✅ Using gltfData.scene`);
       } else if (gltfData.scenes && gltfData.scenes.length > 0) {
         scene = gltfData.scenes[0];
+        console.log(`✅ Using gltfData.scenes[0]`);
       } else if (gltfData instanceof THREE.Object3D) {
         scene = gltfData;
+        console.log(`✅ Using gltfData as Object3D`);
       } else {
+        console.log(`⚠️ No scene found, creating fallback group`);
         // Fallback: create group and add all children
         scene = new THREE.Group();
         if (gltfData.children) {
           gltfData.children.forEach((child: any) => (scene as THREE.Group).add(child));
         }
+      }
+      
+      // ✅ VALIDATE SCENE HAS CONTENT
+      if (!scene.children || scene.children.length === 0) {
+        console.warn(`⚠️ Scene has no children - might be empty model`);
+        throw new Error(`Model appears to be empty (no children in scene)`);
       }
       
       console.log(`✅ 3D scene extracted successfully!`);
@@ -227,6 +249,12 @@ export class DynamicGLBLoader {
       
     } catch (error) {
       console.error('❌ Error parsing GLB with Expo-Three:', error);
+      console.error('❌ Error details:', {
+        message: (error as Error).message,
+        stack: (error as Error).stack,
+        assetUri,
+        config: config.name
+      });
       throw error;
     }
   }
