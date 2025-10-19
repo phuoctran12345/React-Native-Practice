@@ -27,17 +27,24 @@ export class AssetResolver {
       }
 
       // Resolve asset dựa trên file path
-      // ✅ DYNAMIC ASSET RESOLVER - KHÔNG HARDCODE!
-      console.log(`🔄 Dynamic asset resolution for: ${filePath}`);
+      // ✅ FIX: LOAD TỪ BUNDLE THAY VÌ URI!
+      console.log(`🔄 Loading from bundle: ${filePath}`);
       
-      // Tạo asset từ file path dynamic
-      const asset = new Asset({
-        name: filePath.split('/').pop() || 'model',
-        type: filePath.endsWith('.glb') ? 'glb' : 
-              filePath.endsWith('.gltf') ? 'gltf' : 
-              filePath.endsWith('.bin') ? 'bin' : 'unknown',
-        uri: filePath,
-      });
+      let asset: Asset;
+      
+      // ✅ LOAD TỪ BUNDLE - KHÔNG HARDCODE!
+      if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
+        console.log(`🦂 Loading Pokemon Scizor from pokemon_concua bundle`);
+        asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
+      } else if (filePath.includes('scene.gltf')) {
+        console.log(`📁 Loading scene.gltf from bundle`);
+        asset = Asset.fromModule(require('../assets/models/scene.gltf'));
+      } else if (filePath.includes('pokemon_scizor.glb')) {
+        console.log(`🦂 Loading Pokemon Scizor from root bundle`);
+        asset = Asset.fromModule(require('../assets/models/pokemon_scizor.glb'));
+      } else {
+        throw new Error(`Unsupported asset: ${filePath}`);
+      }
       
       // Download asset
       await asset.downloadAsync();

@@ -174,8 +174,16 @@ export class DynamicGLBLoader {
         return this.createFallbackModel(config);
       }
       
-      // Try to load REAL file with expo-three
+      // ✅ FIX: LOAD FILE LOCAL VỚI FILESYSTEM!
       console.log(`🔄 Loading REAL 3D file: ${assetUri}`);
+      
+      // Kiểm tra file có tồn tại không
+      const fileInfo = await FileSystem.getInfoAsync(assetUri);
+      if (!fileInfo.exists) {
+        throw new Error(`File not found: ${assetUri}`);
+      }
+      
+      console.log(`✅ File exists: ${assetUri}`);
       const gltfData = await loadAsync(assetUri);
       
       console.log(`✅ GLTF data loaded:`, {
