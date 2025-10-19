@@ -25,30 +25,79 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [scannedData, setScannedData] = useState<string | null>(null);
 
-  // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ - SỬA LỖI!
+  // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ VÀ ZOOM - SỬA LỖI!
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [initialDistance, setInitialDistance] = useState<number | null>(null);
+  const [currentScale, setCurrentScale] = useState<number>(1);
   
+  // ✅ HELPER FUNCTION ĐỂ TÍNH KHOẢNG CÁCH GIỮA 2 TOUCH
+  const getDistance = (touch1: any, touch2: any) => {
+    const dx = touch1.pageX - touch2.pageX;
+    const dy = touch1.pageY - touch2.pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
   const handleTouchStart = (event: any) => {
-    const touch = event.nativeEvent.touches[0];
-    setTouchStart({ x: touch.pageX, y: touch.pageY });
+    const touches = event.nativeEvent.touches;
+    
+    if (touches.length === 1) {
+      // Single touch - rotation
+      setTouchStart({ x: touches[0].pageX, y: touches[0].pageY });
+    } else if (touches.length === 2) {
+      // Multi touch - zoom
+      const distance = getDistance(touches[0], touches[1]);
+      setInitialDistance(distance);
+    }
   };
   
   const handleTouchMove = (event: any) => {
-    if (!touchStart || !modelRef.current) return;
+    if (!modelRef.current) return;
     
-    const touch = event.nativeEvent.touches[0];
-    const deltaX = touch.pageX - touchStart.x;
-    const rotationSpeed = 0.01;
+    const touches = event.nativeEvent.touches;
     
-    // ✅ ĐÁNH DẤU USER ĐANG XOAY
-    (modelRef.current as any).isUserRotating = true;
-    
-    // ✅ XOAY TRỰC TIẾP THEO TOUCH
-    modelRef.current.rotation.y += deltaX * rotationSpeed;
+    if (touches.length === 1 && touchStart) {
+      // Single touch - rotation
+      const touch = touches[0];
+      const deltaX = touch.pageX - touchStart.x;
+      const deltaY = touch.pageY - touchStart.y;
+      const rotationSpeed = 0.008; // ✅ TĂNG TỐC ĐỘ XOAY
+      
+      // ✅ ĐÁNH DẤU USER ĐANG XOAY
+      (modelRef.current as any).isUserRotating = true;
+      
+      // ✅ XOAY 360 ĐỘ THEO CẢ X VÀ Y
+      modelRef.current.rotation.y += deltaX * rotationSpeed;
+      modelRef.current.rotation.x += deltaY * rotationSpeed * 0.5; // Xoay theo chiều dọc nhẹ hơn
+      
+      // ✅ CẬP NHẬT TOUCH START ĐỂ XOAY MƯỢT
+      setTouchStart({ x: touch.pageX, y: touch.pageY });
+      
+    } else if (touches.length === 2 && initialDistance) {
+      // Multi touch - zoom
+      const currentDistance = getDistance(touches[0], touches[1]);
+      const scale = currentDistance / initialDistance;
+      const newScale = currentScale * scale;
+      
+      // ✅ GIỚI HẠN ZOOM (0.5x đến 3x)
+      const clampedScale = Math.max(0.5, Math.min(3, newScale));
+      const originalScale = (modelRef.current as any).originalScale || 0.025;
+      
+      modelRef.current.scale.setScalar(originalScale * clampedScale);
+      setCurrentScale(clampedScale);
+      setInitialDistance(currentDistance);
+    }
   };
   
   const handleTouchEnd = () => {
     setTouchStart(null);
+    setInitialDistance(null);
+    
+    // ✅ RESET USER ROTATING FLAG SAU 1 GIÂY
+    setTimeout(() => {
+      if (modelRef.current) {
+        (modelRef.current as any).isUserRotating = false;
+      }
+    }, 1000);
   };
 
   const onHandlerStateChange = (event: any) => {
@@ -175,19 +224,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
           loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
           
-          // ✅ FIX MATERIAL - ĐẢM BẢO TEXTURE HIỂN THỊ ĐÚNG
+          // ✅ GIỮ NGUYÊN MÀU SẮC GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
           loadedModel.traverse((child: any) => {
             if (child.isMesh && child.material) {
-              // Đảm bảo material hoạt động và hiển thị đúng
+              // Chỉ đảm bảo material hoạt động, KHÔNG thay đổi màu sắc
               child.material.needsUpdate = true;
-              child.material.transparent = false;
-              child.material.opacity = 1.0;
-              
-              // Nếu material quá tối, tăng emissive nhẹ
-              if (child.material.color) {
-                child.material.emissive = new THREE.Color(0x111111);
-              }
-              
               child.castShadow = true;
               child.receiveShadow = true;
             }
@@ -305,9 +346,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
 
-      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN TRONG TẦM NHÌN - XA HƠN
-      camera.position.set(0, 0, 8); // XA HƠN NỮA để thấy toàn bộ model
-      camera.lookAt(0, -0.3, 0); // Nhìn vào vị trí model
+      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN CHÍNH GIỮA MÀN HÌNH
+      camera.position.set(0, 0, 6); // Khoảng cách vừa phải
+      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
 
       // ✅ ÁNH SÁNG MẠNH HƠN - SỬA LỖI MODEL ĐEN!
       // Ambient light mạnh hơn để đảm bảo model không bị đen
@@ -461,7 +502,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         
         {scannedData && (
           <Text style={styles.subInstruction}>
-            👆 Vuốt trái/phải để xoay Pokemon • Di chuyển điện thoại để xem từ các góc độ khác
+            👆 Vuốt để xoay 360° • 🤏 Pinch để zoom in/out • 📱 Di chuyển điện thoại để xem từ các góc độ khác
           </Text>
         )}
 

@@ -35,9 +35,9 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
   'scizor': {
     id: 'scizor',
     name: 'Scizor',
-    filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb', // ✅ Sử dụng GLB đơn giản hơn
-    scale: 0.02, // ✅ NHỎ HƠN - SỬA LỖI QUÁ TO
-    position: { x: 0, y: -0.3, z: 0 }, // ✅ THẤP HƠN - SỬA LỖI BỊ CẮT
+    filePath: 'assets/models/pokemon_concua/scene.gltf', // ✅ DÙNG GLTF ĐỂ GIỮ MÀU SẮC GỐC
+    scale: 0.025, // ✅ TĂNG SCALE LÊN CHÚT ĐỂ RÕ HƠN
+    position: { x: 0, y: 0, z: 0 }, // ✅ CHÍNH GIỮA MÀN HÌNH
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
   },
