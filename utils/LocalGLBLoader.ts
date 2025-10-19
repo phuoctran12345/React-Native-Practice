@@ -60,24 +60,19 @@ export class LocalGLBLoader {
     try {
       console.log(`📦 Loading LOCAL asset: ${filePath}`);
       
-      // Sử dụng Asset.fromModule với require trực tiếp
+      // Sử dụng Asset.fromURI với đường dẫn bundle
       let asset;
       
-      if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
-        // Load Pokemon Scizor từ pokemon_concua
-        console.log(`🦂 Loading Pokemon Scizor from pokemon_concua`);
-        asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
-      } else if (filePath.includes('scene.gltf')) {
-        // Load scene.gltf
-        console.log(`📁 Loading scene.gltf`);
-        asset = Asset.fromModule(require('../assets/models/scene.gltf'));
-      } else {
-        // Fallback: tạo asset từ URI
-        console.log(`🔄 Using fallback asset creation`);
-        asset = new Asset();
-        asset.uri = filePath;
-        asset.type = 'glb';
-      }
+      // Tạo đường dẫn bundle
+      const bundlePath = `file:///android_asset/${filePath}`;
+      console.log(`🔄 Creating asset from bundle path: ${bundlePath}`);
+      
+      // Tạo asset từ bundle path
+      asset = new Asset({
+        name: filePath.split('/').pop() || 'model',
+        type: filePath.endsWith('.glb') ? 'glb' : 'gltf',
+        uri: bundlePath,
+      });
       
       // Download asset
       await asset.downloadAsync();

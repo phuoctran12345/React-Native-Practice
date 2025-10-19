@@ -118,7 +118,7 @@ export class DynamicGLBLoader {
           console.log(`❌ Dynamic URL failed: ${response.status}`);
         }
       } catch (error) {
-        console.log(`❌ Dynamic URL error:`, error.message);
+        console.log(`❌ Dynamic URL error:`, (error as Error).message);
       }
     }
     
@@ -174,7 +174,7 @@ export class DynamicGLBLoader {
       });
       
       // Extract scene from GLTF data
-      let scene;
+      let scene: THREE.Object3D;
       if (gltfData.scene) {
         scene = gltfData.scene;
       } else if (gltfData.scenes && gltfData.scenes.length > 0) {
@@ -185,7 +185,7 @@ export class DynamicGLBLoader {
         // Fallback: create group and add all children
         scene = new THREE.Group();
         if (gltfData.children) {
-          gltfData.children.forEach((child: any) => scene.add(child));
+          gltfData.children.forEach((child: any) => (scene as THREE.Group).add(child));
         }
       }
       
@@ -232,25 +232,78 @@ export class DynamicGLBLoader {
    * Fallback khi không load được file thật
    */
   private createFallbackModel(config: GLBModelConfig): THREE.Object3D {
-    console.log(`⚠️ Cannot load real 3D file, creating simple fallback`);
+    console.log(`⚠️ Cannot load real 3D file, creating Pokemon-like fallback`);
     
-    // Simple error indicator
+    // Tạo Pokemon-like model
     const group = new THREE.Group();
-    const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-    const material = new THREE.MeshStandardMaterial({ 
-      color: 0xFF0000,
-      wireframe: true
-    });
-    const cube = new THREE.Mesh(geometry, material);
-    group.add(cube);
+    
+    if (config.id.includes('scizor')) {
+      // Tạo Scizor-like model
+      console.log(`🦂 Creating Scizor-like fallback`);
+      
+      // Body (màu đỏ)
+      const bodyGeometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 8);
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xCC0000 });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 0;
+      group.add(body);
+      
+      // Head (màu đỏ đậm)
+      const headGeometry = new THREE.SphereGeometry(0.25, 8, 8);
+      const headMaterial = new THREE.MeshStandardMaterial({ color: 0x990000 });
+      const head = new THREE.Mesh(headGeometry, headMaterial);
+      head.position.y = 0.6;
+      group.add(head);
+      
+      // Arms/Claws (màu bạc)
+      const armGeometry = new THREE.BoxGeometry(0.15, 0.6, 0.15);
+      const armMaterial = new THREE.MeshStandardMaterial({ color: 0xCCCCCC });
+      
+      const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+      leftArm.position.set(-0.4, 0.2, 0);
+      group.add(leftArm);
+      
+      const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+      rightArm.position.set(0.4, 0.2, 0);
+      group.add(rightArm);
+      
+      // Wings (màu xám)
+      const wingGeometry = new THREE.PlaneGeometry(0.4, 0.6);
+      const wingMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x666666, 
+        transparent: true, 
+        opacity: 0.7 
+      });
+      
+      const leftWing = new THREE.Mesh(wingGeometry, wingMaterial);
+      leftWing.position.set(-0.3, 0.3, -0.2);
+      leftWing.rotation.y = Math.PI / 4;
+      group.add(leftWing);
+      
+      const rightWing = new THREE.Mesh(wingGeometry, wingMaterial);
+      rightWing.position.set(0.3, 0.3, -0.2);
+      rightWing.rotation.y = -Math.PI / 4;
+      group.add(rightWing);
+      
+    } else {
+      // Generic Pokemon fallback
+      const geometry = new THREE.SphereGeometry(0.5, 8, 8);
+      const material = new THREE.MeshStandardMaterial({ 
+        color: 0xFFD700,
+        wireframe: true
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      group.add(sphere);
+    }
     
     // Add metadata
     (group as any).modelType = config.id;
     (group as any).isHardcoded = false;
     (group as any).isFallback = true;
-    (group as any).source = 'fallback';
+    (group as any).source = 'pokemon-fallback';
+    (group as any).originalScale = config.scale || 1;
     
-    console.log(`✅ Fallback error cube created`);
+    console.log(`✅ Pokemon-like fallback created for: ${config.name}`);
     return group;
   }
 
