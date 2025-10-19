@@ -1,23 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from 'react-native';
+import { Camera, CameraView } from 'expo-camera';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
 import * as THREE from 'three';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import { glbLoader, GLBModelConfig } from '../utils/DynamicGLBLoader';
-import { dynamic3DLoader, Dynamic3DConfig } from '../utils/Dynamic3DLoader';
+import { getGLBModelFromQRData } from '../utils/modelData';
 
-interface PokemonScizorViewerProps {
+interface PokemonARViewerProps {
   onClose: () => void;
 }
 
-const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) => {
-  const [isLoading, setIsLoading] = useState(true);
+const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [modelInfo, setModelInfo] = useState<string>('');
+  const [showDebugControls, setShowDebugControls] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>({});
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const modelRef = useRef<THREE.Object3D | null>(null);
   const rotationRef = useRef({ x: 0, y: 0 });
+  const [scannedData, setScannedData] = useState<string | null>(null);
 
   // Gesture handler cho vuốt trái/phải
   const onGestureEvent = (event: any) => {
@@ -45,12 +50,129 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
   };
 
   useEffect(() => {
+    requestCameraPermission();
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
     };
   }, []);
+
+  const requestCameraPermission = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    setHasPermission(status === 'granted');
+  };
+
+  // Handle QR Code scan
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+    console.log('🔍 QR Code scanned:', data);
+    setScannedData(data);
+    loadPokemonModel(data);
+  };
+
+  // Load Pokemon model từ QR data
+  const loadPokemonModel = async (qrData: string) => {
+    try {
+      setIsLoading(true);
+      setLoadingProgress(10);
+      setModelInfo('Đang phân tích QR code...');
+      
+      // Parse QR data để lấy model config
+      const glbConfig = getGLBModelFromQRData(qrData);
+      
+      if (glbConfig) {
+        console.log(`🎮 Loading Pokemon model: ${glbConfig.name}`);
+        setModelInfo(`Đang tải ${glbConfig.name}...`);
+        setLoadingProgress(30);
+        
+        try {
+          // Load model bằng GLB Loader
+          const loadedModel = await glbLoader.loadModel(glbConfig);
+          
+          // Apply config settings
+          if (glbConfig.scale) {
+            loadedModel.scale.setScalar(glbConfig.scale);
+          }
+          
+          if (glbConfig.position) {
+            loadedModel.position.set(
+              glbConfig.position.x,
+              glbConfig.position.y,
+              glbConfig.position.z
+            );
+          }
+          
+          if (glbConfig.rotation) {
+            loadedModel.rotation.set(
+              glbConfig.rotation.x,
+              glbConfig.rotation.y,
+              glbConfig.rotation.z
+            );
+          }
+          
+          modelRef.current = loadedModel;
+          
+          // Store original scale for animation
+          (loadedModel as any).originalScale = glbConfig.scale || 1;
+          
+          // Add breathing animation
+          const breathingAnimation = () => {
+            if (loadedModel && !(loadedModel as any).isFallback) {
+              const time = Date.now() * 0.001;
+              const originalScale = (loadedModel as any).originalScale || 1;
+              loadedModel.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
+            }
+          };
+          
+          (loadedModel as any).animate = breathingAnimation;
+          
+          setLoadingProgress(90);
+          setModelInfo(`✅ ${glbConfig.name} đã tải thành công!`);
+          
+          console.log(`✅ Pokemon model loaded: ${glbConfig.name}`);
+          
+        } catch (glbError) {
+          console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
+          setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
+          
+          // Show error alert
+          Alert.alert(
+            '❌ Lỗi tải model',
+            `Không thể tải model ${glbConfig.name}. Vui lòng thử lại.`,
+            [{ text: 'OK' }]
+          );
+        }
+        
+        setLoadingProgress(100);
+        setIsLoading(false);
+        
+      } else {
+        // Không tìm thấy model
+        console.warn('⚠️ Unknown Pokemon model ID');
+        setModelInfo('⚠️ Pokemon model không tồn tại');
+        
+        Alert.alert(
+          '⚠️ Model không tồn tại',
+          'QR code không chứa Pokemon model hợp lệ. Vui lòng thử QR code khác.',
+          [{ text: 'OK' }]
+        );
+        
+        setIsLoading(false);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error loading Pokemon model:', error);
+      setModelInfo('❌ Lỗi tải Pokemon model');
+      
+      Alert.alert(
+        '❌ Lỗi hệ thống',
+        'Có lỗi xảy ra khi tải Pokemon model. Vui lòng thử lại.',
+        [{ text: 'OK' }]
+      );
+      
+      setIsLoading(false);
+    }
+  };
 
   const onContextCreate = async (gl: any) => {
     try {
@@ -65,7 +187,7 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
       
       const renderer = new Renderer({ gl });
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
-      renderer.setClearColor(0x87CEEB, 1); // Màu xanh da trời
+      renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
 
       // Đặt camera
       camera.position.z = 5;
@@ -84,108 +206,10 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
       redLight.position.set(-5, 5, 5);
       scene.add(redLight);
 
-      // Load model Pokemon Scizor từ pokemon_concua
-      try {
-        console.log('🎮 Loading Pokemon Scizor from pokemon_concua...');
-        setLoadingProgress(10);
-        setModelInfo('Đang tải Pokemon Scizor...');
-        
-        // Config cho Scizor từ pokemon_concua
-        const scizorConfig: GLBModelConfig = {
-          id: 'scizor_concua',
-          name: 'Scizor (Pokemon Concua)',
-          filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb',
-          scale: 1.2,
-          position: { x: 0, y: -0.3, z: 0 },
-          rotation: { x: 0, y: 0, z: 0 },
-          animations: ['idle', 'attack', 'fly']
-        };
-        
-        setLoadingProgress(30);
-        setModelInfo('Đang phân tích file 3D...');
-        
-        try {
-          // Load model bằng GLB Loader
-          const loadedModel = await glbLoader.loadModel(scizorConfig);
-          
-          // Apply config settings
-          if (scizorConfig.scale) {
-            loadedModel.scale.setScalar(scizorConfig.scale);
-          }
-          
-          if (scizorConfig.position) {
-            loadedModel.position.set(
-              scizorConfig.position.x,
-              scizorConfig.position.y,
-              scizorConfig.position.z
-            );
-          }
-          
-          if (scizorConfig.rotation) {
-            loadedModel.rotation.set(
-              scizorConfig.rotation.x,
-              scizorConfig.rotation.y,
-              scizorConfig.rotation.z
-            );
-          }
-          
-          modelRef.current = loadedModel;
-          scene.add(loadedModel);
-          
-          // Store original scale for animation
-          (loadedModel as any).originalScale = scizorConfig.scale || 1;
-          
-          // Add breathing animation
-          const breathingAnimation = () => {
-            if (loadedModel && !(loadedModel as any).isFallback) {
-              const time = Date.now() * 0.001;
-              const originalScale = (loadedModel as any).originalScale || 1;
-              loadedModel.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
-            }
-          };
-          
-          (loadedModel as any).animate = breathingAnimation;
-          
-          setLoadingProgress(90);
-          setModelInfo('✅ Pokemon Scizor đã tải thành công!');
-          
-          console.log('✅ Pokemon Scizor loaded successfully!');
-          
-        } catch (glbError) {
-          console.error('❌ GLB loading failed:', glbError);
-          setModelInfo('❌ Không thể tải file .glb');
-          
-          // Fallback: tạo cube đỏ
-          const errorGeometry = new THREE.BoxGeometry(2, 2, 2);
-          const errorMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0xFF0000,
-            wireframe: true,
-          });
-          const errorCube = new THREE.Mesh(errorGeometry, errorMaterial);
-          
-          modelRef.current = errorCube;
-          scene.add(errorCube);
-        }
-        
-        setLoadingProgress(100);
-        setIsLoading(false);
-        
-      } catch (error) {
-        console.error('❌ Error loading Pokemon Scizor:', error);
-        setModelInfo('❌ Lỗi tải Pokemon Scizor');
-        
-        // Ultimate fallback
-        const fallbackGeometry = new THREE.BoxGeometry(2, 2, 2);
-        const fallbackMaterial = new THREE.MeshStandardMaterial({ 
-          color: 0xFF0000,
-          wireframe: true,
-        });
-        const fallbackCube = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-        
-        modelRef.current = fallbackCube;
-        scene.add(fallbackCube);
-        setIsLoading(false);
-      }
+      // Ánh sáng rim light
+      const rimLight = new THREE.DirectionalLight(0xaaaaff, 0.3);
+      rimLight.position.set(0, 2, -8);
+      scene.add(rimLight);
 
       // Animation loop
       const animate = () => {
@@ -197,14 +221,8 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
           if ((modelRef.current as any).animate) {
             (modelRef.current as any).animate();
           } else {
-            // Fallback animation
-            if ((modelRef.current as any).isFallback) {
-              modelRef.current.rotation.y += 0.01;
-              modelRef.current.rotation.x += 0.005;
-            } else {
-              const originalScale = (modelRef.current as any).originalScale || 1;
-              modelRef.current.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
-            }
+            const originalScale = (modelRef.current as any).originalScale || 1;
+            modelRef.current.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
           }
         }
 
@@ -220,9 +238,38 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
     }
   };
 
+  if (hasPermission === null) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>Đang yêu cầu quyền truy cập camera...</Text>
+      </View>
+    );
+  }
+
+  if (hasPermission === false) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>❌ Không có quyền truy cập camera</Text>
+        <TouchableOpacity style={styles.button} onPress={onClose}>
+          <Text style={styles.buttonText}>Quay lại</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <GestureHandlerRootView style={styles.container}>
-      {/* 3D View với Gesture Handler */}
+      {/* Camera làm background */}
+      <CameraView 
+        style={styles.camera} 
+        facing="back"
+        onBarcodeScanned={scannedData ? undefined : handleBarCodeScanned}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr', 'pdf417'],
+        }}
+      />
+
+      {/* Overlay 3D với Gesture Handler */}
       <View style={styles.glContainer}>
         <PanGestureHandler
           onGestureEvent={onGestureEvent}
@@ -248,7 +295,7 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
             </View>
             <Text style={styles.progressText}>{loadingProgress}%</Text>
             
-            <Text style={styles.systemInfo}>🎮 Pokemon Scizor 3D Viewer</Text>
+            <Text style={styles.systemInfo}>🎮 Pokemon AR System</Text>
           </View>
         </View>
       )}
@@ -256,11 +303,17 @@ const PokemonScizorViewer: React.FC<PokemonScizorViewerProps> = ({ onClose }) =>
       {/* UI Controls */}
       <View style={styles.overlay}>
         <Text style={styles.instruction}>
-          🦂 Pokemon Scizor 3D Model
+          📱 Quét QR code để hiển thị Pokemon 3D
         </Text>
         <Text style={styles.subInstruction}>
-          👆 Vuốt trái/phải để xoay • Di chuyển để xem từ các góc độ khác
+          👆 Vuốt trái/phải để xoay Pokemon • Di chuyển điện thoại để xem từ các góc độ khác
         </Text>
+
+        {scannedData && (
+          <Text style={styles.scannedData}>
+            🔍 Đã quét: {scannedData}
+          </Text>
+        )}
 
         <TouchableOpacity 
           style={styles.closeButton}
@@ -277,6 +330,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
   },
   glContainer: {
     position: 'absolute',
@@ -306,12 +362,12 @@ const styles = StyleSheet.create({
   },
   instruction: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 10,
     marginTop: 20,
   },
@@ -324,6 +380,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     marginTop: 10,
+  },
+  scannedData: {
+    color: '#FFD700',
+    fontSize: 12,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 15,
+    paddingVertical: 5,
+    borderRadius: 15,
+    marginTop: 5,
   },
   closeButton: {
     backgroundColor: 'rgba(255,0,0,0.7)',
@@ -393,6 +459,23 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
   },
+  button: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    marginTop: 20,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  text: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+  },
 });
 
-export default PokemonScizorViewer;
+export default PokemonARViewer;

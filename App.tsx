@@ -65,9 +65,9 @@ console.error = (...args) => {
 import Demo from './components/Demo';
 import ARScreen from './screens/ARScreen';
 import PureARScreen from './screens/PureARScreen';
-import PokemonScizorViewer from './components/PokemonScizorViewer';
+import PokemonARViewer from './components/PokemonARViewer';
 
-type AppMode = 'menu' | 'sketchfab' | 'ar' | 'pure-ar' | 'pokemon-scizor';
+type AppMode = 'menu' | 'sketchfab' | 'ar' | 'pure-ar' | 'pokemon-ar';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>('menu');
@@ -114,13 +114,14 @@ export default function App() {
 
           <TouchableOpacity
             style={[styles.menuButton, { backgroundColor: '#8B0000' }]}
-            onPress={() => setMode('pokemon-scizor')}
+            onPress={() => setMode('pokemon-ar')}
           >
             <Text style={styles.menuButtonText}>
-              🦂 Pokemon Scizor 3D{'\n'}
-              <Text style={styles.menuButtonSubtext}>(Model từ pokemon_concua collection)</Text>
+              🦂 Pokemon AR Camera{'\n'}
+              <Text style={styles.menuButtonSubtext}>(Camera + QR Scanner + Pokemon 3D đầy đủ màu sắc)</Text>
             </Text>
           </TouchableOpacity>
+
         </View>
       </SafeAreaProvider>
     );
@@ -160,12 +161,13 @@ export default function App() {
     );
   }
 
-  // Pokemon Scizor 3D Viewer
-  if (mode === 'pokemon-scizor') {
+
+  // Pokemon AR Camera
+  if (mode === 'pokemon-ar') {
     return (
       <SafeAreaProvider>
         <View style={styles.demoContainer}>
-          <PokemonScizorViewer onClose={() => setMode('menu')} />
+          <PokemonARViewer onClose={() => setMode('menu')} />
         </View>
       </SafeAreaProvider>
     );
