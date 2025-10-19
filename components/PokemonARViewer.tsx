@@ -40,14 +40,18 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   const handleTouchStart = (event: any) => {
     const touches = event.nativeEvent.touches;
+    console.log(`👆 Touch start: ${touches.length} fingers`);
     
     if (touches.length === 1) {
       // Single touch - rotation
       setTouchStart({ x: touches[0].pageX, y: touches[0].pageY });
+      console.log(`🔄 Single touch - rotation mode`);
     } else if (touches.length === 2) {
       // Multi touch - zoom
       const distance = getDistance(touches[0], touches[1]);
       setInitialDistance(distance);
+      setCurrentScale(1); // Reset scale
+      console.log(`🔍 Multi touch - zoom mode, distance: ${distance.toFixed(2)}`);
     }
   };
   
@@ -80,19 +84,18 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // Multi touch - zoom
       const currentDistance = getDistance(touches[0], touches[1]);
       const scale = currentDistance / initialDistance;
-      const newScale = currentScale * scale;
       
       // ✅ GIỚI HẠN ZOOM (0.3x đến 2x) - MOBILE FRIENDLY
-      const clampedScale = Math.max(0.3, Math.min(2, newScale));
+      const clampedScale = Math.max(0.3, Math.min(2, scale));
       const originalScale = (modelRef.current as any).originalScale || 0.03;
       
       // ✅ SMOOTH SCALING
       const targetScale = originalScale * clampedScale;
       modelRef.current.scale.setScalar(targetScale);
       
-      console.log(`🔍 Zoom: ${clampedScale.toFixed(2)}x, Scale: ${targetScale.toFixed(3)}`);
+      console.log(`🔍 Zoom: ${clampedScale.toFixed(2)}x, Scale: ${targetScale.toFixed(3)}, Distance: ${currentDistance.toFixed(2)}`);
       
-      setCurrentScale(clampedScale);
+      // ✅ CẬP NHẬT DISTANCE LIÊN TỤC
       setInitialDistance(currentDistance);
     }
   };

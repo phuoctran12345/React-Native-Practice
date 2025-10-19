@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three-stdlib';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -116,26 +117,9 @@ export class ThreeJSGLTFLoader {
       
       console.log(`✅ File exists: ${assetUri}`);
       
-      // ✅ SỬ DỤNG THREE.JS GLTFLOADER THAY VÌ EXPO-THREE
-      const loader = new THREE.GLTFLoader();
-      
-      // Load GLTF với Three.js
-      const gltfData = await new Promise((resolve, reject) => {
-        loader.load(
-          assetUri,
-          (gltf) => {
-            console.log(`✅ Three.js GLTFLoader completed successfully!`);
-            resolve(gltf);
-          },
-          (progress) => {
-            console.log(`📊 Loading progress: ${(progress.loaded / progress.total * 100).toFixed(1)}%`);
-          },
-          (error) => {
-            console.error(`❌ Three.js GLTFLoader failed:`, error);
-            reject(error);
-          }
-        );
-      });
+      // ✅ SỬ DỤNG GLTFLoader TỪ THREE-STDLIB - 100% CHÍNH XÁC
+      console.log(`🔄 Using GLTFLoader from three-stdlib for 100% accuracy`);
+      const gltfData = await this.loadGLTFWithThreeStdlib(assetUri);
       
       console.log(`✅ GLTF data loaded with Three.js:`, {
         hasScene: !!(gltfData as any).scene,
@@ -191,6 +175,54 @@ export class ThreeJSGLTFLoader {
         config: config.name
       });
       throw error;
+    }
+  }
+
+  /**
+   * Load GLTF với GLTFLoader từ three-stdlib - 100% chính xác
+   */
+  private async loadGLTFWithThreeStdlib(assetUri: string): Promise<any> {
+    try {
+      console.log(`🔄 Creating GLTFLoader from three-stdlib`);
+      const loader = new GLTFLoader();
+      
+      // ✅ ĐẶT RESOURCE PATH ĐỂ TỰ ĐỘNG LOAD TEXTURES
+      const baseDir = assetUri.replace(/[^/]+$/, ''); // Lấy thư mục chứa file
+      console.log(`📁 Setting resource path: ${baseDir}`);
+      loader.setPath(baseDir);
+      loader.setResourcePath(baseDir);
+      
+      // Load GLTF với Promise
+      const gltfData = await new Promise((resolve, reject) => {
+        console.log(`🔄 Loading GLTF: ${assetUri}`);
+        loader.load(
+          assetUri,
+          (gltf) => {
+            console.log(`✅ GLTFLoader completed successfully!`);
+            console.log(`📊 GLTF loaded:`, {
+              hasScene: !!gltf.scene,
+              sceneChildren: gltf.scene?.children?.length || 0,
+              animations: gltf.animations?.length || 0,
+            });
+            resolve(gltf);
+          },
+          (progress) => {
+            if (progress.total > 0) {
+              const percent = (progress.loaded / progress.total * 100).toFixed(1);
+              console.log(`📊 Loading progress: ${percent}%`);
+            }
+          },
+          (error) => {
+            console.error(`❌ GLTFLoader failed:`, error);
+            reject(error);
+          }
+        );
+      });
+      
+      return gltfData;
+    } catch (loadError) {
+      console.error(`❌ GLTFLoader from three-stdlib failed:`, loadError);
+      throw new Error(`GLTFLoader failed to load GLTF file: ${(loadError as Error).message}`);
     }
   }
 
