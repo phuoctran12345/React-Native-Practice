@@ -218,41 +218,51 @@ export class ThreeJSGLTFLoader {
     try {
       console.log(`🎨 Loading texture assets for accurate colors`);
       
-      const textureFiles = [
-        { name: 'Eye.002_baseColor', path: '../assets/models/pokemon_concua/textures/Eye.002_baseColor.png' },
-        { name: 'Mouth.002_baseColor', path: '../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png' },
-        { name: 'Wing_baseColor', path: '../assets/models/pokemon_concua/textures/Wing_baseColor.png' },
+      // ✅ Metro bundler KHÔNG CHO PHÉP require() với biến động.
+      //    Dùng map tĩnh tới từng file texture.
+      const staticTextureEntries: Array<{ name: string; asset: Asset }> = [
+        {
+          name: 'Eye.002_baseColor',
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Eye.002_baseColor.png')),
+        },
+        {
+          name: 'Mouth.002_baseColor',
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png')),
+        },
+        {
+          name: 'Wing_baseColor',
+          asset: Asset.fromModule(require('../assets/models/pokemon_concua/textures/Wing_baseColor.png')),
+        },
       ];
-      
-      const textureAssets = [];
-      
-      for (const textureFile of textureFiles) {
+
+      const textureAssets = [] as Array<{ name: string; asset: Asset; texture?: THREE.Texture }>;
+
+      for (const entry of staticTextureEntries) {
         try {
-          console.log(`🎨 Loading texture: ${textureFile.name}`);
-          const asset = Asset.fromModule(require(textureFile.path));
-          await asset.downloadAsync();
-          
+          console.log(`🎨 Loading texture: ${entry.name}`);
+          await entry.asset.downloadAsync();
+
           // Create Three.js texture
           const loader = new THREE.TextureLoader();
           const texture = await new Promise<THREE.Texture>((resolve, reject) => {
             loader.load(
-              asset.localUri!,
-              (texture) => {
-                console.log(`✅ Texture loaded: ${textureFile.name}`);
-                resolve(texture);
+              entry.asset.localUri!,
+              (t) => {
+                console.log(`✅ Texture loaded: ${entry.name}`);
+                resolve(t);
               },
               undefined,
               reject
             );
           });
-          
+
           textureAssets.push({
-            name: textureFile.name,
-            asset,
-            texture
+            name: entry.name,
+            asset: entry.asset,
+            texture,
           });
         } catch (error) {
-          console.warn(`⚠️ Failed to load texture ${textureFile.name}:`, error);
+          console.warn(`⚠️ Failed to load texture ${entry.name}:`, error);
         }
       }
       
