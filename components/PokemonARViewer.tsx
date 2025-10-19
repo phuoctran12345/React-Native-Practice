@@ -5,7 +5,7 @@ import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
 import * as THREE from 'three';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
-import { glbLoader, GLBModelConfig } from '../utils/DynamicGLBLoader';
+import { localGLBLoader, LocalGLBModelConfig } from '../utils/LocalGLBLoader';
 import { getGLBModelFromQRData } from '../utils/modelData';
 
 interface PokemonARViewerProps {
@@ -86,8 +86,19 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         setLoadingProgress(30);
         
         try {
-          // Load model bằng GLB Loader
-          const loadedModel = await glbLoader.loadModel(glbConfig);
+          // Convert GLB config to Local GLB config
+          const localConfig: LocalGLBModelConfig = {
+            id: glbConfig.id,
+            name: glbConfig.name,
+            filePath: glbConfig.filePath,
+            scale: glbConfig.scale,
+            position: glbConfig.position,
+            rotation: glbConfig.rotation,
+            animations: glbConfig.animations
+          };
+          
+          // Load model bằng Local GLB Loader
+          const loadedModel = await localGLBLoader.loadModel(localConfig);
           
           // Apply config settings
           if (glbConfig.scale) {
