@@ -1,0 +1,11 @@
+Model Information:
+* title:	Pokemon 3DS Scizor
+* source:	https://sketchfab.com/3d-models/pokemon-3ds-scizor-cc15c8ab51914206b912ad11e5439274
+* author:	ijackprovostjr (https://sketchfab.com/ijackprovostjr)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Pokemon 3DS Scizor" (https://sketchfab.com/3d-models/pokemon-3ds-scizor-cc15c8ab51914206b912ad11e5439274) by ijackprovostjr (https://sketchfab.com/ijackprovostjr) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
