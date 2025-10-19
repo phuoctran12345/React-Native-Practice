@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three-stdlib';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
+import { loadAsync } from 'expo-three';
 
 // Custom Three.js GLTFLoader for React Native
 export class ThreeJSGLTFLoader {
@@ -117,9 +117,9 @@ export class ThreeJSGLTFLoader {
       
       console.log(`✅ File exists: ${assetUri}`);
       
-      // ✅ SỬ DỤNG GLTFLoader TỪ THREE-STDLIB - 100% CHÍNH XÁC
-      console.log(`🔄 Using GLTFLoader from three-stdlib for 100% accuracy`);
-      const gltfData = await this.loadGLTFWithThreeStdlib(assetUri);
+      // ✅ SỬ DỤNG EXPO-THREE + PRELOAD TEXTURES CHO MÀU SẮC CHÍNH XÁC
+      console.log(`🔄 Using expo-three with texture preloading for accurate colors`);
+      const gltfData = await this.loadGLTFWithTexturePreloading(assetUri);
       
       console.log(`✅ GLTF data loaded with Three.js:`, {
         hasScene: !!(gltfData as any).scene,
@@ -179,50 +179,133 @@ export class ThreeJSGLTFLoader {
   }
 
   /**
-   * Load GLTF với GLTFLoader từ three-stdlib - 100% chính xác
+   * Load GLTF với expo-three + preload textures cho màu sắc chính xác
    */
-  private async loadGLTFWithThreeStdlib(assetUri: string): Promise<any> {
+  private async loadGLTFWithTexturePreloading(assetUri: string): Promise<any> {
     try {
-      console.log(`🔄 Creating GLTFLoader from three-stdlib`);
-      const loader = new GLTFLoader();
+      console.log(`🎨 Preloading textures for accurate colors`);
       
-      // ✅ ĐẶT RESOURCE PATH ĐỂ TỰ ĐỘNG LOAD TEXTURES
-      const baseDir = assetUri.replace(/[^/]+$/, ''); // Lấy thư mục chứa file
-      console.log(`📁 Setting resource path: ${baseDir}`);
-      loader.setPath(baseDir);
-      loader.setResourcePath(baseDir);
+      // ✅ PRELOAD TEXTURE FILES TRƯỚC KHI LOAD GLTF
+      const textureAssets = await this.preloadTextureAssets();
+      console.log(`✅ Preloaded ${textureAssets.length} texture files`);
       
-      // Load GLTF với Promise
-      const gltfData = await new Promise((resolve, reject) => {
-        console.log(`🔄 Loading GLTF: ${assetUri}`);
-        loader.load(
-          assetUri,
-          (gltf) => {
-            console.log(`✅ GLTFLoader completed successfully!`);
-            console.log(`📊 GLTF loaded:`, {
-              hasScene: !!gltf.scene,
-              sceneChildren: gltf.scene?.children?.length || 0,
-              animations: gltf.animations?.length || 0,
-            });
-            resolve(gltf);
-          },
-          (progress) => {
-            if (progress.total > 0) {
-              const percent = (progress.loaded / progress.total * 100).toFixed(1);
-              console.log(`📊 Loading progress: ${percent}%`);
-            }
-          },
-          (error) => {
-            console.error(`❌ GLTFLoader failed:`, error);
-            reject(error);
-          }
-        );
+      console.log(`🔄 Loading GLTF with expo-three: ${assetUri}`);
+      const gltfData = await loadAsync(assetUri);
+      
+      console.log(`✅ expo-three loadAsync completed successfully`);
+      console.log(`📊 GLTF loaded:`, {
+        hasScene: !!gltfData.scene,
+        sceneChildren: gltfData.scene?.children?.length || 0,
+        animations: gltfData.animations?.length || 0,
       });
+      
+      // ✅ APPLY PRELOADED TEXTURES TO MATERIALS
+      if (gltfData.scene) {
+        await this.applyPreloadedTextures(gltfData.scene, textureAssets);
+      }
       
       return gltfData;
     } catch (loadError) {
-      console.error(`❌ GLTFLoader from three-stdlib failed:`, loadError);
-      throw new Error(`GLTFLoader failed to load GLTF file: ${(loadError as Error).message}`);
+      console.error(`❌ expo-three + texture preloading failed:`, loadError);
+      throw new Error(`Failed to load GLTF with textures: ${(loadError as Error).message}`);
+    }
+  }
+
+  /**
+   * Preload texture assets
+   */
+  private async preloadTextureAssets(): Promise<Array<{name: string, asset: Asset, texture?: THREE.Texture}>> {
+    try {
+      console.log(`🎨 Loading texture assets for accurate colors`);
+      
+      const textureFiles = [
+        { name: 'Eye.002_baseColor', path: '../assets/models/pokemon_concua/textures/Eye.002_baseColor.png' },
+        { name: 'Mouth.002_baseColor', path: '../assets/models/pokemon_concua/textures/Mouth.002_baseColor.png' },
+        { name: 'Wing_baseColor', path: '../assets/models/pokemon_concua/textures/Wing_baseColor.png' },
+      ];
+      
+      const textureAssets = [];
+      
+      for (const textureFile of textureFiles) {
+        try {
+          console.log(`🎨 Loading texture: ${textureFile.name}`);
+          const asset = Asset.fromModule(require(textureFile.path));
+          await asset.downloadAsync();
+          
+          // Create Three.js texture
+          const loader = new THREE.TextureLoader();
+          const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+            loader.load(
+              asset.localUri!,
+              (texture) => {
+                console.log(`✅ Texture loaded: ${textureFile.name}`);
+                resolve(texture);
+              },
+              undefined,
+              reject
+            );
+          });
+          
+          textureAssets.push({
+            name: textureFile.name,
+            asset,
+            texture
+          });
+        } catch (error) {
+          console.warn(`⚠️ Failed to load texture ${textureFile.name}:`, error);
+        }
+      }
+      
+      return textureAssets;
+    } catch (error) {
+      console.error(`❌ Error preloading textures:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Apply preloaded textures to materials
+   */
+  private async applyPreloadedTextures(scene: THREE.Object3D, textureAssets: Array<{name: string, asset: Asset, texture?: THREE.Texture}>): Promise<void> {
+    try {
+      console.log(`🎨 Applying preloaded textures to materials`);
+      
+      scene.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const material = child.material;
+          
+          // Find matching texture based on material name
+          if (material.name) {
+            const matchingTexture = textureAssets.find(ta => 
+              material.name.includes(ta.name.split('_')[0]) || // Eye.002 matches Eye
+              ta.name.toLowerCase().includes(material.name.toLowerCase())
+            );
+            
+            if (matchingTexture && matchingTexture.texture) {
+              console.log(`🎨 Applying texture ${matchingTexture.name} to material ${material.name}`);
+              
+              // Apply texture to material
+              if (material.map) {
+                material.map = matchingTexture.texture;
+              } else {
+                material.map = matchingTexture.texture;
+              }
+              
+              // Ensure material updates
+              material.needsUpdate = true;
+            }
+          }
+          
+          // Ensure material properties for visibility
+          material.needsUpdate = true;
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      
+      console.log(`✅ Applied preloaded textures to materials`);
+    } catch (error) {
+      console.error(`❌ Error applying textures:`, error);
     }
   }
 
