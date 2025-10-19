@@ -55,7 +55,8 @@ export class AssetResolver {
       // Cache asset
       this.assetCache.set(filePath, asset);
       
-      console.log(`✅ Asset resolved: ${asset.localUri}`);
+      console.log(`✅ Asset resolved successfully: ${asset.localUri}`);
+      console.log(`📁 File size: ${asset.downloaded ? 'Downloaded' : 'Local'}`);
       return asset.localUri!;
       
     } catch (error) {

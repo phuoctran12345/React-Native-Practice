@@ -85,6 +85,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const requestCameraPermission = async () => {
     const { status } = await Camera.requestCameraPermissionsAsync();
     setHasPermission(status === 'granted');
+    console.log('📷 Camera permission:', status === 'granted' ? 'GRANTED' : 'DENIED');
   };
 
   // Tạo fallback model khi load thất bại
@@ -142,6 +143,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   // Handle QR Code scan
   const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+    console.log('🎯 QR Code scanned successfully:', data);
     setScannedData(data);
     loadPokemonModel(data);
   };
@@ -157,6 +159,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const glbConfig = getGLBModelFromQRData(qrData);
       
       if (glbConfig) {
+        console.log('✅ Model config found:', glbConfig.name, 'File:', glbConfig.filePath);
         setModelInfo(`Đang tải ${glbConfig.name}...`);
         setLoadingProgress(30);
         
@@ -195,6 +198,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ ADD MODEL VÀO SCENE - QUAN TRỌNG!
           if (sceneRef.current) {
             sceneRef.current.add(loadedModel);
+            console.log('🎉 Model added to scene successfully!');
           }
           
           // Store original scale for animation
@@ -216,6 +220,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           setLoadingProgress(90);
           setModelInfo(`✅ ${glbConfig.name} đã tải thành công!`);
+          console.log('🚀 Pokemon model loaded successfully:', glbConfig.name);
           
         } catch (glbError) {
           console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
@@ -273,6 +278,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ Nếu model đã được load trước đó, add vào scene ngay
       if (modelRef.current) {
         scene.add(modelRef.current);
+        console.log('🔄 Adding existing model to new scene');
       }
       
       const camera = new THREE.PerspectiveCamera(
@@ -353,6 +359,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       };
 
       animate();
+      console.log('🎬 3D Scene initialized successfully!');
 
     } catch (error) {
       console.error('Error creating 3D context:', error);
