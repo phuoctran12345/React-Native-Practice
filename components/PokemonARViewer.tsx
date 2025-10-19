@@ -27,6 +27,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   // ✅ GESTURE HANDLER CHO XOAY 360 ĐỘ - SỬA LỖI!
   const onGestureEvent = (event: any) => {
+    console.log(`🔄 Gesture detected:`, event.nativeEvent);
     if (modelRef.current) {
       const { translationX } = event.nativeEvent;
       const rotationSpeed = 0.01; // Tăng tốc độ xoay
@@ -37,7 +38,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ XOAY TRỰC TIẾP THEO GESTURE
       modelRef.current.rotation.y += translationX * rotationSpeed;
       
-      // console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
+      console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
+    } else {
+      console.log(`❌ Model not loaded yet`);
     }
   };
 
@@ -337,7 +340,8 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           // ✅ TỰ ĐỘNG XOAY CHẬM (OPTIONAL)
           if (!(modelRef.current as any).isUserRotating) {
-            modelRef.current.rotation.y += 0.005; // Tự động xoay chậm
+            modelRef.current.rotation.y += 0.01; // Tăng tốc độ auto rotation
+            console.log(`🤖 Auto rotation: ${modelRef.current.rotation.y}`);
           }
         }
 
@@ -384,19 +388,20 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         }}
       />
 
-      {/* Overlay 3D với Gesture Handler */}
-      <View style={styles.glContainer}>
-        <PanGestureHandler
-          onGestureEvent={onGestureEvent}
-          onHandlerStateChange={onHandlerStateChange}
-          minDist={10}
-        >
+      {/* ✅ FIX: GESTURE HANDLER WRAP TOÀN BỘ GLVIEW */}
+      <PanGestureHandler
+        onGestureEvent={onGestureEvent}
+        onHandlerStateChange={onHandlerStateChange}
+        minDist={5}
+        maxPointers={1}
+      >
+        <View style={styles.glContainer}>
           <GLView
             style={styles.glView}
             onContextCreate={onContextCreate}
           />
-        </PanGestureHandler>
-      </View>
+        </View>
+      </PanGestureHandler>
 
       {/* Loading Overlay */}
       {isLoading && (
