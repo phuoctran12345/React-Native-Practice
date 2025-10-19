@@ -37,7 +37,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ XOAY TRỰC TIẾP THEO GESTURE
       modelRef.current.rotation.y += translationX * rotationSpeed;
       
-      console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
+      // console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
     }
   };
 
@@ -54,11 +54,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         setTimeout(() => {
           if (modelRef.current) {
             (modelRef.current as any).isUserRotating = false;
-            console.log(`🔄 Auto rotation resumed`);
+            // console.log(`🔄 Auto rotation resumed`); // ❌ BỚT LOG
           }
         }, 2000);
         
-        console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`);
+        // console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
       }
     }
   };
@@ -213,7 +213,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
               const breathingScale = originalScale + Math.sin(time * 2) * 0.08; // Tăng breathing effect
               loadedModel.scale.setScalar(breathingScale);
               
-              console.log(`💨 Breathing animation: ${breathingScale.toFixed(3)}`);
+              // console.log(`💨 Breathing animation: ${breathingScale.toFixed(3)}`); // ❌ BỚT LOG
             }
           };
           
