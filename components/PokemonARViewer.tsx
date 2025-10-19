@@ -64,6 +64,63 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     setHasPermission(status === 'granted');
   };
 
+  // Tạo fallback model khi load thất bại
+  const createFallbackModel = (config: any) => {
+    console.log(`🔄 Creating fallback model for ${config.name}`);
+    
+    const group = new THREE.Group();
+    
+    if (config.id.includes('scizor')) {
+      // Tạo Scizor-like fallback
+      console.log(`🦂 Creating Scizor-like fallback`);
+      
+      // Body (màu đỏ)
+      const bodyGeometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 8);
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xCC0000 });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 0;
+      group.add(body);
+      
+      // Head (màu đỏ đậm)
+      const headGeometry = new THREE.SphereGeometry(0.25, 8, 8);
+      const headMaterial = new THREE.MeshStandardMaterial({ color: 0x990000 });
+      const head = new THREE.Mesh(headGeometry, headMaterial);
+      head.position.y = 0.6;
+      group.add(head);
+      
+      // Arms/Claws (màu bạc)
+      const armGeometry = new THREE.BoxGeometry(0.15, 0.6, 0.15);
+      const armMaterial = new THREE.MeshStandardMaterial({ color: 0xCCCCCC });
+      
+      const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+      leftArm.position.set(-0.4, 0.2, 0);
+      group.add(leftArm);
+      
+      const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+      rightArm.position.set(0.4, 0.2, 0);
+      group.add(rightArm);
+      
+    } else {
+      // Generic Pokemon fallback
+      const geometry = new THREE.SphereGeometry(0.5, 8, 8);
+      const material = new THREE.MeshStandardMaterial({ 
+        color: 0xFFD700,
+        wireframe: true
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      group.add(sphere);
+    }
+    
+    // Add metadata
+    (group as any).modelType = config.id;
+    (group as any).isFallback = true;
+    (group as any).source = 'pokemon-fallback';
+    (group as any).originalScale = config.scale || 1;
+    
+    console.log(`✅ Fallback model created for: ${config.name}`);
+    return group;
+  };
+
   // Handle QR Code scan
   const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
     console.log('🔍 QR Code scanned:', data);
@@ -155,12 +212,18 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
           setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
           
-          // Show error alert
-          Alert.alert(
-            '❌ Lỗi tải model',
-            `Không thể tải model ${glbConfig.name}. Vui lòng thử lại.`,
-            [{ text: 'OK' }]
-          );
+          // Tạo fallback model thay vì show error
+          console.log(`🔄 Creating fallback model for ${glbConfig.name}`);
+          const fallbackModel = createFallbackModel(glbConfig);
+          modelRef.current = fallbackModel;
+          
+          if (sceneRef.current) {
+            sceneRef.current.add(fallbackModel);
+            console.log(`✅ Fallback model added to scene`);
+          }
+          
+          setLoadingProgress(90);
+          setModelInfo(`⚠️ ${glbConfig.name} - Sử dụng fallback model`);
         }
         
         setLoadingProgress(100);

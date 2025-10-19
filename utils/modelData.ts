@@ -35,9 +35,9 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
   'scizor': {
     id: 'scizor',
     name: 'Scizor',
-    filePath: 'assets/models/scene.gltf', // ✅ GLTF ở root level!
-    scale: 1.0,
-    position: { x: 0, y: -0.4, z: 0 },
+    filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb', // ✅ Load từ pokemon_concua!
+    scale: 1.2,
+    position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
   },
