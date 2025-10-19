@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Asset } from 'expo-asset';
 import { loadAsync } from 'expo-three';
+import * as FileSystem from 'expo-file-system';
 
 // Interface cho Local GLB Model Data
 export interface LocalGLBModelConfig {
@@ -60,16 +61,22 @@ export class LocalGLBLoader {
     try {
       console.log(`📦 Loading LOCAL asset: ${filePath}`);
       
-      // Tạo asset từ file path
-      const asset = new Asset();
-      asset.uri = filePath;
-      asset.type = 'glb';
+      // Sử dụng FileSystem để load file local
+      const bundleDirectory = FileSystem.bundleDirectory;
+      const fullPath = `${bundleDirectory}${filePath}`;
       
-      // Download asset
-      await asset.downloadAsync();
+      console.log(`📁 Full path: ${fullPath}`);
       
-      console.log(`✅ LOCAL asset loaded: ${asset.localUri}`);
-      return asset.localUri!;
+      // Kiểm tra file có tồn tại không
+      const fileInfo = await FileSystem.getInfoAsync(fullPath);
+      
+      if (fileInfo.exists) {
+        console.log(`✅ LOCAL file exists: ${fullPath}`);
+        return fullPath;
+      } else {
+        console.log(`❌ LOCAL file not found: ${fullPath}`);
+        throw new Error(`File not found: ${fullPath}`);
+      }
       
     } catch (error) {
       console.error('❌ Error loading LOCAL asset:', error);
