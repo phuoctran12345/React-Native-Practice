@@ -6,6 +6,9 @@ const keymap = require('./metro.keymap.js');
 
 const config = getDefaultConfig(__dirname);
 
+// 🎯 Cấu hình assets cho 3D models
+config.resolver.assetExts.push('glb', 'gltf', 'bin', 'fbx', 'obj', 'dae');
+
 // 🎯 Custom keymap cho AR Pokemon App
 config.server = {
   ...config.server,
@@ -16,14 +19,6 @@ config.server = {
   experimentalImportSupport: true,
   unstable_allowRequireContext: true,
   
-  // Optimize cho 3D models
-  resolver: {
-    ...config.resolver,
-    assetExts: [
-      ...config.resolver.assetExts,
-      'glb', 'gltf', 'bin', 'fbx', 'obj', 'dae'
-    ],
-  },
   
   // Transformer cho 3D files
   transformer: {

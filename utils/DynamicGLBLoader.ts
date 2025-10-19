@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import { loadAsync } from 'expo-three';
+import { assetResolver } from './AssetResolver';
 
 // Interface cho GLB Model Data
 export interface GLBModelConfig {
@@ -35,8 +36,18 @@ export class DynamicGLBLoader {
         return this.loadedModels.get(config.id)!.clone();
       }
 
-      // Load asset từ file
-      const assetUri = await this.loadAsset(config.filePath);
+      // Load asset từ file - thử local trước, sau đó online
+      let assetUri: string;
+      try {
+        // Thử load từ local assets trước
+        console.log(`🏠 Trying to load from local assets: ${config.filePath}`);
+        assetUri = await assetResolver.resolveAsset(config.filePath);
+        console.log(`✅ Local asset loaded successfully: ${assetUri}`);
+      } catch (localError) {
+        console.log(`❌ Local asset failed, trying online: ${localError}`);
+        // Fallback: load từ online
+        assetUri = await this.loadAsset(config.filePath);
+      }
       
       // Parse GLB file (dùng GLTFLoader thật)
       const model = await this.parseGLB(assetUri, config);
