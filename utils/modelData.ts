@@ -37,7 +37,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     name: 'Scizor',
     filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb', // ✅ Load từ pokemon_concua!
     scale: 0.15,
-    position: { x: 0, y: -0.2, z: 0 },
+    position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
   },
@@ -46,7 +46,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     name: 'Scizor (Pokemon Concua)',
     filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb',
     scale: 0.15,
-    position: { x: 0, y: -0.2, z: 0 },
+    position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
   },
@@ -55,7 +55,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     name: 'Charizard',
     filePath: 'assets/models/charizard_sample.glb', // File này chưa có
     scale: 0.15,
-    position: { x: 0, y: -0.2, z: 0 },
+    position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'fly', 'fire'],
   },

@@ -168,13 +168,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             loadedModel.scale.setScalar(glbConfig.scale);
           }
           
-          if (glbConfig.position) {
-            loadedModel.position.set(
-              glbConfig.position.x,
-              glbConfig.position.y,
-              glbConfig.position.z
-            );
-          }
+          // ✅ FIX: LUÔN ĐẶT MODEL Ở CENTER ĐỂ THẤY ĐƯỢC
+          loadedModel.position.set(0, 0, 0); // Luôn ở center
+          console.log(`📍 Model positioned at center: (0, 0, 0)`);
           
           if (glbConfig.rotation) {
             loadedModel.rotation.set(
@@ -299,8 +295,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
 
-      // Đặt camera
-      camera.position.z = 5;
+      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN TRONG TẦM NHÌN
+      camera.position.set(0, 0, 3); // Gần hơn để thấy rõ model
+      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
 
       // Thêm ánh sáng đẹp cho Pokemon
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -342,6 +339,21 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           if (!(modelRef.current as any).isUserRotating) {
             modelRef.current.rotation.y += 0.01; // Tăng tốc độ auto rotation
             console.log(`🤖 Auto rotation: ${modelRef.current.rotation.y}`);
+          }
+          
+          // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN
+          const modelPosition = modelRef.current.position;
+          const cameraPosition = camera.position;
+          const distance = Math.sqrt(
+            Math.pow(modelPosition.x - cameraPosition.x, 2) +
+            Math.pow(modelPosition.y - cameraPosition.y, 2) +
+            Math.pow(modelPosition.z - cameraPosition.z, 2)
+          );
+          
+          // Nếu model quá xa, đưa về gần camera
+          if (distance > 5) {
+            modelRef.current.position.set(0, 0, 0);
+            console.log(`📍 Model repositioned to center`);
           }
         }
 
