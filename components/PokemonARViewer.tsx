@@ -25,18 +25,19 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [scannedData, setScannedData] = useState<string | null>(null);
 
-  // Gesture handler cho vuốt trái/phải
+  // ✅ GESTURE HANDLER CHO XOAY 360 ĐỘ - SỬA LỖI!
   const onGestureEvent = (event: any) => {
     if (modelRef.current) {
-      const { translationX, velocityX } = event.nativeEvent;
-      const rotationSpeed = 0.008;
+      const { translationX } = event.nativeEvent;
+      const rotationSpeed = 0.01; // Tăng tốc độ xoay
       
-      const targetRotation = rotationRef.current.y + translationX * rotationSpeed;
-      modelRef.current.rotation.y = THREE.MathUtils.lerp(
-        modelRef.current.rotation.y, 
-        targetRotation, 
-        0.1
-      );
+      // ✅ ĐÁNH DẤU USER ĐANG XOAY
+      (modelRef.current as any).isUserRotating = true;
+      
+      // ✅ XOAY TRỰC TIẾP THEO GESTURE
+      modelRef.current.rotation.y += translationX * rotationSpeed;
+      
+      console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
     }
   };
 
@@ -44,8 +45,20 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     if (event.nativeEvent.state === State.END) {
       if (modelRef.current) {
         const { velocityX } = event.nativeEvent;
-        const momentum = velocityX * 0.001;
-        rotationRef.current.y = modelRef.current.rotation.y + momentum;
+        const momentum = velocityX * 0.002; // Tăng momentum
+        
+        // ✅ THÊM MOMENTUM SAU KHI THẢ TAY
+        modelRef.current.rotation.y += momentum;
+        
+        // ✅ RESET FLAG SAU 2 GIÂY
+        setTimeout(() => {
+          if (modelRef.current) {
+            (modelRef.current as any).isUserRotating = false;
+            console.log(`🔄 Auto rotation resumed`);
+          }
+        }, 2000);
+        
+        console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`);
       }
     }
   };
@@ -192,12 +205,15 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // Store original scale for animation
           (loadedModel as any).originalScale = glbConfig.scale || 1;
           
-          // Add breathing animation
+          // ✅ BREATHING ANIMATION - SỬA LỖI!
           const breathingAnimation = () => {
             if (loadedModel && !(loadedModel as any).isFallback) {
               const time = Date.now() * 0.001;
               const originalScale = (loadedModel as any).originalScale || 1;
-              loadedModel.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
+              const breathingScale = originalScale + Math.sin(time * 2) * 0.08; // Tăng breathing effect
+              loadedModel.scale.setScalar(breathingScale);
+              
+              console.log(`💨 Breathing animation: ${breathingScale.toFixed(3)}`);
             }
           };
           
@@ -302,18 +318,26 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       rimLight.position.set(0, 2, -8);
       scene.add(rimLight);
 
-      // Animation loop
+      // ✅ ANIMATION LOOP - CẢI THIỆN!
       const animate = () => {
         timeoutRef.current = setTimeout(animate, 1000 / 60);
 
         if (modelRef.current) {
           const time = Date.now() * 0.001;
           
+          // ✅ BREATHING ANIMATION CHO TẤT CẢ MODEL
           if ((modelRef.current as any).animate) {
             (modelRef.current as any).animate();
           } else {
+            // Fallback breathing animation
             const originalScale = (modelRef.current as any).originalScale || 1;
-            modelRef.current.scale.setScalar(originalScale + Math.sin(time * 2) * 0.05);
+            const breathingScale = originalScale + Math.sin(time * 2) * 0.08;
+            modelRef.current.scale.setScalar(breathingScale);
+          }
+          
+          // ✅ TỰ ĐỘNG XOAY CHẬM (OPTIONAL)
+          if (!(modelRef.current as any).isUserRotating) {
+            modelRef.current.rotation.y += 0.005; // Tự động xoay chậm
           }
         }
 
