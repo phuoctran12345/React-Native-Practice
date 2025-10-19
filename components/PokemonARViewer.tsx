@@ -175,11 +175,19 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
           loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
           
-          // ✅ GIỮ NGUYÊN THIẾT KẾ GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
+          // ✅ FIX MATERIAL - ĐẢM BẢO TEXTURE HIỂN THỊ ĐÚNG
           loadedModel.traverse((child: any) => {
             if (child.isMesh && child.material) {
-              // Chỉ đảm bảo material hoạt động, không thay đổi màu sắc
+              // Đảm bảo material hoạt động và hiển thị đúng
               child.material.needsUpdate = true;
+              child.material.transparent = false;
+              child.material.opacity = 1.0;
+              
+              // Nếu material quá tối, tăng emissive nhẹ
+              if (child.material.color) {
+                child.material.emissive = new THREE.Color(0x111111);
+              }
+              
               child.castShadow = true;
               child.receiveShadow = true;
             }
@@ -298,29 +306,34 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
 
       // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN TRONG TẦM NHÌN - XA HƠN
-      camera.position.set(0, 0, 5); // Xa hơn để thấy toàn bộ model
-      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
+      camera.position.set(0, 0, 8); // XA HƠN NỮA để thấy toàn bộ model
+      camera.lookAt(0, -0.3, 0); // Nhìn vào vị trí model
 
-      // ✅ ÁNH SÁNG TỐI ƯU CHO THIẾT KẾ GỐC
+      // ✅ ÁNH SÁNG MẠNH HƠN - SỬA LỖI MODEL ĐEN!
       // Ambient light mạnh hơn để đảm bảo model không bị đen
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
       scene.add(ambientLight);
 
-      // Directional light chính từ trên xuống
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      // Directional light chính từ trên xuống - MẠNH HƠN
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
       directionalLight.position.set(0, 10, 5);
       directionalLight.castShadow = true;
       scene.add(directionalLight);
 
-      // Ánh sáng phụ từ bên trái
-      const leftLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      // Ánh sáng phụ từ bên trái - MẠNH HƠN
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.8);
       leftLight.position.set(-5, 5, 5);
       scene.add(leftLight);
 
-      // Ánh sáng phụ từ bên phải
-      const rightLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      // Ánh sáng phụ từ bên phải - MẠNH HƠN
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.8);
       rightLight.position.set(5, 5, 5);
       scene.add(rightLight);
+      
+      // Thêm point light để chiếu sáng toàn diện
+      const pointLight = new THREE.PointLight(0xffffff, 1.0, 100);
+      pointLight.position.set(0, 0, 10);
+      scene.add(pointLight);
 
       // ✅ ANIMATION LOOP - CẢI THIỆN!
       const animate = () => {
