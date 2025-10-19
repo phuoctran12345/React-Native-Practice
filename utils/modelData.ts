@@ -18,7 +18,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     id: 'pikachu',
     name: 'Pikachu',
     filePath: 'assets/models/pikachu_sample.glb',
-    scale: 0.8,
+    scale: 0.4,
     position: { x: 0, y: -0.5, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'walk', 'attack'], // Nếu có animation trong .glb
@@ -27,7 +27,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     id: 'raichu',
     name: 'Raichu',
     filePath: 'assets/models/raichu_sample.glb', // File này chưa có
-    scale: 0.5,
+    scale: 0.25,
     position: { x: 0, y: -0.3, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'thunder'],
@@ -36,7 +36,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     id: 'scizor',
     name: 'Scizor',
     filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb', // ✅ Load từ pokemon_concua!
-    scale: 0.6,
+    scale: 0.3,
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
@@ -45,7 +45,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     id: 'scizor_concua',
     name: 'Scizor (Pokemon Concua)',
     filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb',
-    scale: 0.6,
+    scale: 0.3,
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
@@ -54,7 +54,7 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
     id: 'charizard',
     name: 'Charizard',
     filePath: 'assets/models/charizard_sample.glb', // File này chưa có
-    scale: 0.6,
+    scale: 0.3,
     position: { x: 0, y: -0.2, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'fly', 'fire'],
@@ -68,35 +68,35 @@ export const MODEL_DATABASE: { [key: string]: ModelData } = {
     name: 'Pikachu',
     modelPath: 'pikachu_sample.glb', // File trong assets/models/
     description: 'Pokémon điện hệ đáng yêu',
-    scale: 0.5,
+    scale: 0.25,
   },
   'raichu': {
     id: 'raichu',
     name: 'Raichu',
     modelPath: 'raichu.glb',
     description: 'Tiến hóa của Pikachu',
-    scale: 0.6,
+    scale: 0.3,
   },
   'scizor': {
     id: 'scizor',
     name: 'Scizor',
     modelPath: 'pokemon_scizor.glb',
     description: 'Pokémon côn trùng thép mạnh mẽ',
-    scale: 0.5,
+    scale: 0.25,
   },
   'scizor_concua': {
     id: 'scizor_concua',
     name: 'Scizor (Pokemon Concua)',
     modelPath: 'pokemon_concua/pokemon_scizor.glb',
     description: 'Pokémon Scizor từ Pokemon Concua collection',
-    scale: 0.6,
+    scale: 0.3,
   },
   'pokeball': {
     id: 'pokeball',
     name: 'Pokeball',
     modelPath: 'pokeball.glb',
     description: 'Quả cầu bắt Pokemon',
-    scale: 0.5,
+    scale: 0.25,
   },
 };
 
@@ -247,17 +247,17 @@ export const SAMPLE_QR_DATA = {
   // GLB samples
   pikachuGLB: JSON.stringify({ 
     modelId: 'pikachu', 
-    scale: 0.5,
+    scale: 0.25,
     position: { x: 0, y: -0.2, z: 0 }
   }),
   scizorGLB: JSON.stringify({ 
     modelId: 'scizor', 
-    scale: 0.6,
+    scale: 0.3,
     rotation: { x: 0, y: Math.PI / 4, z: 0 }
   }),
   charizardGLB: JSON.stringify({ 
     modelId: 'charizard', 
-    scale: 0.8,
+    scale: 0.4,
     rotation: { x: 0, y: Math.PI / 4, z: 0 }
   }),
 };
