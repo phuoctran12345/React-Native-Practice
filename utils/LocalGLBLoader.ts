@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { Asset } from 'expo-asset';
 import { loadAsync } from 'expo-three';
-import * as FileSystem from 'expo-file-system';
 
 // Interface cho Local GLB Model Data
 export interface LocalGLBModelConfig {
@@ -61,22 +60,30 @@ export class LocalGLBLoader {
     try {
       console.log(`📦 Loading LOCAL asset: ${filePath}`);
       
-      // Sử dụng FileSystem để load file local
-      const bundleDirectory = FileSystem.bundleDirectory;
-      const fullPath = `${bundleDirectory}${filePath}`;
+      // Sử dụng Asset.fromModule với require trực tiếp
+      let asset;
       
-      console.log(`📁 Full path: ${fullPath}`);
-      
-      // Kiểm tra file có tồn tại không
-      const fileInfo = await FileSystem.getInfoAsync(fullPath);
-      
-      if (fileInfo.exists) {
-        console.log(`✅ LOCAL file exists: ${fullPath}`);
-        return fullPath;
+      if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
+        // Load Pokemon Scizor từ pokemon_concua
+        console.log(`🦂 Loading Pokemon Scizor from pokemon_concua`);
+        asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
+      } else if (filePath.includes('scene.gltf')) {
+        // Load scene.gltf
+        console.log(`📁 Loading scene.gltf`);
+        asset = Asset.fromModule(require('../assets/models/scene.gltf'));
       } else {
-        console.log(`❌ LOCAL file not found: ${fullPath}`);
-        throw new Error(`File not found: ${fullPath}`);
+        // Fallback: tạo asset từ URI
+        console.log(`🔄 Using fallback asset creation`);
+        asset = new Asset();
+        asset.uri = filePath;
+        asset.type = 'glb';
       }
+      
+      // Download asset
+      await asset.downloadAsync();
+      
+      console.log(`✅ LOCAL asset loaded: ${asset.localUri}`);
+      return asset.localUri!;
       
     } catch (error) {
       console.error('❌ Error loading LOCAL asset:', error);
