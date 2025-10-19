@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert, TouchableWithoutFeedback } from 'react-native';
 import { Camera, CameraView } from 'expo-camera';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
@@ -25,23 +25,34 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [scannedData, setScannedData] = useState<string | null>(null);
 
-  // ✅ GESTURE HANDLER CHO XOAY 360 ĐỘ - SỬA LỖI!
-  const onGestureEvent = (event: any) => {
-    console.log(`🔄 Gesture detected:`, event.nativeEvent);
-    if (modelRef.current) {
-      const { translationX } = event.nativeEvent;
-      const rotationSpeed = 0.01; // Tăng tốc độ xoay
-      
-      // ✅ ĐÁNH DẤU USER ĐANG XOAY
-      (modelRef.current as any).isUserRotating = true;
-      
-      // ✅ XOAY TRỰC TIẾP THEO GESTURE
-      modelRef.current.rotation.y += translationX * rotationSpeed;
-      
-      console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
-    } else {
-      console.log(`❌ Model not loaded yet`);
-    }
+  // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ - SỬA LỖI!
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  
+  const handleTouchStart = (event: any) => {
+    const touch = event.nativeEvent.touches[0];
+    setTouchStart({ x: touch.pageX, y: touch.pageY });
+    console.log(`🔄 Touch started at:`, { x: touch.pageX, y: touch.pageY });
+  };
+  
+  const handleTouchMove = (event: any) => {
+    if (!touchStart || !modelRef.current) return;
+    
+    const touch = event.nativeEvent.touches[0];
+    const deltaX = touch.pageX - touchStart.x;
+    const rotationSpeed = 0.01;
+    
+    // ✅ ĐÁNH DẤU USER ĐANG XOAY
+    (modelRef.current as any).isUserRotating = true;
+    
+    // ✅ XOAY TRỰC TIẾP THEO TOUCH
+    modelRef.current.rotation.y += deltaX * rotationSpeed;
+    
+    console.log(`🔄 Model rotation Y: ${modelRef.current.rotation.y}`);
+  };
+  
+  const handleTouchEnd = () => {
+    setTouchStart(null);
+    console.log(`🔄 Touch ended`);
   };
 
   const onHandlerStateChange = (event: any) => {
@@ -168,9 +179,30 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             loadedModel.scale.setScalar(glbConfig.scale);
           }
           
-          // ✅ FIX: LUÔN ĐẶT MODEL Ở CENTER ĐỂ THẤY ĐƯỢC
-          loadedModel.position.set(0, 0, 0); // Luôn ở center
-          console.log(`📍 Model positioned at center: (0, 0, 0)`);
+          // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
+          loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
+          console.log(`📍 Model positioned at: (0, -0.5, 0)`);
+          
+          // ✅ GIỮ NGUYÊN THIẾT KẾ GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
+          loadedModel.traverse((child: any) => {
+            if (child.isMesh && child.material) {
+              console.log(`🎨 Found mesh:`, child.name, 'Material type:', child.material.type);
+              
+              // Chỉ đảm bảo material hoạt động, không thay đổi màu sắc
+              child.material.needsUpdate = true;
+              child.castShadow = true;
+              child.receiveShadow = true;
+              
+              // Log material info để debug
+              console.log(`📊 Material info:`, {
+                name: child.name,
+                type: child.material.type,
+                color: child.material.color,
+                map: child.material.map,
+                transparent: child.material.transparent
+              });
+            }
+          });
           
           if (glbConfig.rotation) {
             loadedModel.rotation.set(
@@ -295,28 +327,30 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
 
-      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN TRONG TẦM NHÌN
-      camera.position.set(0, 0, 3); // Gần hơn để thấy rõ model
+      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN TRONG TẦM NHÌN - XA HƠN
+      camera.position.set(0, 0, 5); // Xa hơn để thấy toàn bộ model
       camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
 
-      // Thêm ánh sáng đẹp cho Pokemon
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      // ✅ ÁNH SÁNG TỐI ƯU CHO THIẾT KẾ GỐC
+      // Ambient light mạnh hơn để đảm bảo model không bị đen
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(5, 10, 7.5);
+      // Directional light chính từ trên xuống
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      directionalLight.position.set(0, 10, 5);
       directionalLight.castShadow = true;
       scene.add(directionalLight);
 
-      // Ánh sáng phụ màu đỏ cho Scizor
-      const redLight = new THREE.DirectionalLight(0xff4444, 0.3);
-      redLight.position.set(-5, 5, 5);
-      scene.add(redLight);
+      // Ánh sáng phụ từ bên trái
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      leftLight.position.set(-5, 5, 5);
+      scene.add(leftLight);
 
-      // Ánh sáng rim light
-      const rimLight = new THREE.DirectionalLight(0xaaaaff, 0.3);
-      rimLight.position.set(0, 2, -8);
-      scene.add(rimLight);
+      // Ánh sáng phụ từ bên phải
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      rightLight.position.set(5, 5, 5);
+      scene.add(rightLight);
 
       // ✅ ANIMATION LOOP - CẢI THIỆN!
       const animate = () => {
@@ -337,7 +371,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           // ✅ TỰ ĐỘNG XOAY CHẬM (OPTIONAL)
           if (!(modelRef.current as any).isUserRotating) {
-            modelRef.current.rotation.y += 0.01; // Tăng tốc độ auto rotation
+            modelRef.current.rotation.y += 0.02; // Tăng tốc độ auto rotation
             console.log(`🤖 Auto rotation: ${modelRef.current.rotation.y}`);
           }
           
@@ -400,20 +434,18 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         }}
       />
 
-      {/* ✅ FIX: GESTURE HANDLER WRAP TOÀN BỘ GLVIEW */}
-      <PanGestureHandler
-        onGestureEvent={onGestureEvent}
-        onHandlerStateChange={onHandlerStateChange}
-        minDist={5}
-        maxPointers={1}
+      {/* ✅ FIX: TOUCH HANDLER TRỰC TIẾP VỚI GLVIEW */}
+      <View 
+        style={styles.glContainer}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
-        <View style={styles.glContainer}>
-          <GLView
-            style={styles.glView}
-            onContextCreate={onContextCreate}
-          />
-        </View>
-      </PanGestureHandler>
+        <GLView
+          style={styles.glView}
+          onContextCreate={onContextCreate}
+        />
+      </View>
 
       {/* Loading Overlay */}
       {isLoading && (
@@ -434,12 +466,22 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
       {/* UI Controls */}
       <View style={styles.overlay}>
-        <Text style={styles.instruction}>
-          📱 Quét QR code để hiển thị Pokemon 3D
-        </Text>
-        <Text style={styles.subInstruction}>
-          👆 Vuốt trái/phải để xoay Pokemon • Di chuyển điện thoại để xem từ các góc độ khác
-        </Text>
+        {/* ✅ FIX: UI NHẤT QUÁN - THAY ĐỔI THEO TRẠNG THÁI */}
+        {!scannedData ? (
+          <Text style={styles.instruction}>
+            📱 Quét QR code để hiển thị Pokemon 3D
+          </Text>
+        ) : (
+          <Text style={styles.instruction}>
+            🦂 {modelInfo || 'Pokemon đã sẵn sàng!'}
+          </Text>
+        )}
+        
+        {scannedData && (
+          <Text style={styles.subInstruction}>
+            👆 Vuốt trái/phải để xoay Pokemon • Di chuyển điện thoại để xem từ các góc độ khác
+          </Text>
+        )}
 
         {scannedData && (
           <Text style={styles.scannedData}>
