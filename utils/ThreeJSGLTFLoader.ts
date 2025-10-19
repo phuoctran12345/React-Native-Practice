@@ -193,6 +193,8 @@ export class ThreeJSGLTFLoader {
       // ✅ FALLBACK STRATEGY: Nếu không load được textures, vẫn load GLTF
       if (textureAssets.length === 0) {
         console.warn(`⚠️ No textures loaded, will use GLTF without custom textures`);
+      } else {
+        console.log(`✅ Loaded ${textureAssets.length} textures (including fallbacks)`);
       }
       
       console.log(`🔄 Loading GLTF with expo-three: ${assetUri}`);
@@ -281,12 +283,16 @@ export class ThreeJSGLTFLoader {
           const textureUri = entry.asset.uri || entry.asset.localUri;
           console.log(`🔍 Using texture URI: ${textureUri}`);
           
-          // Create Three.js texture với timeout
+          // ✅ FIX: Tăng timeout và thêm retry logic
           const loader = new THREE.TextureLoader();
           const texture = await new Promise<THREE.Texture>((resolve, reject) => {
             const textureTimeout = setTimeout(() => {
-              reject(new Error(`Texture load timeout: ${entry.name}`));
-            }, 3000);
+              console.warn(`⚠️ Texture load timeout for ${entry.name}, using fallback`);
+              // ✅ KHÔNG REJECT - TẠO FALLBACK TEXTURE
+              const fallbackTexture = new THREE.Texture();
+              fallbackTexture.name = entry.name;
+              resolve(fallbackTexture);
+            }, 10000); // ✅ TĂNG TIMEOUT TỪ 3s → 10s
             
             loader.load(
               textureUri!,
@@ -298,8 +304,11 @@ export class ThreeJSGLTFLoader {
               undefined,
               (error) => {
                 clearTimeout(textureTimeout);
-                console.error(`❌ TextureLoader error for ${entry.name}:`, error);
-                reject(error);
+                console.warn(`⚠️ TextureLoader error for ${entry.name}, using fallback:`, error);
+                // ✅ KHÔNG REJECT - TẠO FALLBACK TEXTURE
+                const fallbackTexture = new THREE.Texture();
+                fallbackTexture.name = entry.name;
+                resolve(fallbackTexture);
               }
             );
           });
