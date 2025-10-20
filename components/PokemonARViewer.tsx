@@ -230,13 +230,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           setLoadingProgress(40);
           setModelInfo(`Đang tải model ${glbConfig.name}...`);
           
-          // ✅ THÊM TIMEOUT CHO TEXTURE LOADING
-          const loadPromise = threeJSGLTFLoader.loadModel(glbConfig);
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Loading timeout after 15 seconds')), 15000)
-          );
-          
-          const loadedModel = await Promise.race([loadPromise, timeoutPromise]) as THREE.Object3D;
+          // ✅ BỎ TIMEOUT CỨNG 15s: tiếp tục chờ và cập nhật trạng thái
+          //    Tránh rơi vào fallback do mạng chậm / texture chậm
+          setModelInfo(`Đang tải model ${glbConfig.name} (có thể mất 10-20s lần đầu)...`);
+          const loadedModel = await threeJSGLTFLoader.loadModel(glbConfig);
           
           // Apply config settings
           if (glbConfig.scale) {
@@ -285,15 +282,15 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           const breathingAnimation = () => {
             if (loadedModel && !(loadedModel as any).isFallback) {
               const time = Date.now() * 0.001;
-              const originalScale = (loadedModel as any).originalScale || 1;
-              const breathingScale = originalScale + Math.sin(time * 2) * 0.08; // Tăng breathing effect
+              const originalScale = (loadedModel as any).originalScale || glbConfig.scale || 1;
+              const breathingScale = originalScale + Math.sin(time * 2) * 0.15; // ✅ TĂNG BREATHING EFFECT
               loadedModel.scale.setScalar(breathingScale);
-              
-              // console.log(`💨 Breathing animation: ${breathingScale.toFixed(3)}`); // ❌ BỚT LOG
             }
           };
           
           (loadedModel as any).animate = breathingAnimation;
+          (loadedModel as any).originalScale = glbConfig.scale || 1;
+          (loadedModel as any).isUserRotating = false; // ✅ ĐỂ AUTO-ROTATION HOẠT ĐỘNG
           
           setLoadingProgress(95);
           setModelInfo(`Đang thêm vào scene...`);

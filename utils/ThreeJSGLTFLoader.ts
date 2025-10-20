@@ -81,6 +81,13 @@ export class ThreeJSGLTFLoader {
           wingTexture.downloadAsync()
         ]);
         
+      } else if (filePath.includes('pokemon_concua/pokemon_scizor.glb')) {
+        console.log(`📁 Loading GLB from pokemon_concua bundle (embedded textures)`);
+        asset = Asset.fromModule(require('../assets/models/pokemon_concua/pokemon_scizor.glb'));
+        
+        // ✅ GLB ĐÃ CÓ TEXTURE EMBED - KHÔNG CẦN LOAD RIÊNG
+        console.log(`✅ GLB file has embedded textures - no external texture loading needed`);
+        
       } else {
         throw new Error(`Unsupported asset: ${filePath}`);
       }
@@ -118,9 +125,16 @@ export class ThreeJSGLTFLoader {
       
       console.log(`✅ File exists: ${assetUri}`);
       
-      // ✅ SỬ DỤNG EXPO-THREE + PRELOAD TEXTURES CHO MÀU SẮC CHÍNH XÁC
-      console.log(`🔄 Using expo-three with texture preloading for accurate colors`);
-      const gltfData = await this.loadGLTFWithTexturePreloading(assetUri);
+      // ✅ SỬ DỤNG EXPO-THREE TRỰC TIẾP CHO GLB (KHÔNG CẦN PRELOAD TEXTURE)
+      if (assetUri.includes('pokemon_scizor.glb')) {
+        console.log(`🔄 Loading GLB directly with expo-three (embedded textures)`);
+        const gltfData = await loadAsync(assetUri);
+        return gltfData;
+      } else {
+        console.log(`🔄 Using expo-three with texture preloading for accurate colors`);
+        const gltfData = await this.loadGLTFWithTexturePreloading(assetUri);
+        return gltfData;
+      }
       
       console.log(`✅ GLTF data loaded with Three.js:`, {
         hasScene: !!(gltfData as any).scene,
@@ -207,17 +221,19 @@ export class ThreeJSGLTFLoader {
         animations: gltfData.animations?.length || 0,
       });
       
-      // ✅ APPLY PRELOADED TEXTURES TO MATERIALS (chỉ khi có textures)
+      // ✅ ƯU TIÊN TEXTURE GỐC TRONG GLTF; chỉ apply nếu chắc chắn mapping đúng
       if (gltfData.scene && textureAssets.length > 0) {
         await this.applyPreloadedTextures(gltfData.scene, textureAssets);
       } else if (gltfData.scene) {
-        console.log(`⚠️ No custom textures to apply, using GLTF default textures`);
+        console.log(`⚠️ No custom textures to apply, using GLTF embedded/default textures`);
       }
       
       return gltfData;
     } catch (loadError) {
-      console.error(`❌ expo-three + texture preloading failed:`, loadError);
-      throw new Error(`Failed to load GLTF with textures: ${(loadError as Error).message}`);
+      // ✅ KHÔNG THROW NỮA: fallback sang load GLTF bình thường (không preloaded textures)
+      console.warn(`⚠️ Texture preloading failed, fallback to plain GLTF load:`, loadError);
+      const gltfData = await loadAsync(assetUri);
+      return gltfData;
     }
   }
 
@@ -325,17 +341,8 @@ export class ThreeJSGLTFLoader {
           console.warn(`⚠️ Failed to load texture ${entry.name}:`, error);
           console.warn(`⚠️ Texture path: ${entry.asset.uri || 'unknown'}`);
           console.warn(`⚠️ Local URI: ${entry.asset.localUri || 'unknown'}`);
-          
-          // ✅ FALLBACK: Tạo texture đơn giản thay vì skip
-          console.log(`🔄 Creating fallback texture for ${entry.name}`);
-          const fallbackTexture = new THREE.Texture();
-          fallbackTexture.name = entry.name;
-          
-          textureAssets.push({
-            name: entry.name,
-            asset: entry.asset,
-            texture: fallbackTexture,
-          });
+          // ❗KHÔNG override bằng fallback texture để giữ nguyên texture embedded trong GLTF
+          // Tiếp tục mà không push texture để dùng default textures của GLTF
         }
       }
       
