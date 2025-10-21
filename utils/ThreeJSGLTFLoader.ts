@@ -13,6 +13,18 @@ export class ThreeJSGLTFLoader {
   }
 
   /**
+   * Get cached model for instant loading
+   */
+  getCachedModel(modelId: string): THREE.Object3D | null {
+    const cached = this.loadedModels.get(modelId);
+    if (cached) {
+      console.log(`⚡ Cache hit for model: ${modelId}`);
+      return cached.clone(); // Clone để tránh conflict
+    }
+    return null;
+  }
+
+  /**
    * Load GLTF model với Three.js GLTFLoader - 100% chính xác
    */
   async loadModel(config: any): Promise<THREE.Object3D> {
@@ -125,18 +137,12 @@ export class ThreeJSGLTFLoader {
       
       console.log(`✅ File exists: ${assetUri}`);
       
-      // ✅ SỬ DỤNG EXPO-THREE TRỰC TIẾP CHO GLB (KHÔNG CẦN PRELOAD TEXTURE)
-      if (assetUri.includes('pokemon_scizor.glb')) {
-        console.log(`🔄 Loading GLB directly with expo-three (embedded textures)`);
-        const gltfData = await loadAsync(assetUri);
-        return gltfData;
-      } else {
-        console.log(`🔄 Using expo-three with texture preloading for accurate colors`);
-        const gltfData = await this.loadGLTFWithTexturePreloading(assetUri);
-        return gltfData;
-      }
+      // ✅ CHỌN NHÁNH LOAD THEO ĐUÔI FILE
+      // ✅ ALWAYS USE EXPO-THREE FOR COMPATIBILITY - NO GLTFLoader
+      console.log(`🔄 Loading with expo-three for React Native compatibility`);
+      const gltfData = await loadAsync(assetUri);
       
-      console.log(`✅ GLTF data loaded with Three.js:`, {
+      console.log(`✅ GLTF/GLB data loaded:`, {
         hasScene: !!(gltfData as any).scene,
         hasScenes: !!(gltfData as any).scenes,
         type: typeof gltfData,
@@ -144,7 +150,7 @@ export class ThreeJSGLTFLoader {
         sceneChildren: (gltfData as any).scene?.children?.length || 0,
       });
       
-      // Extract scene từ GLTF data
+      // Extract scene từ GLTF/GLB data
       let scene: THREE.Object3D;
       if ((gltfData as any).scene) {
         scene = (gltfData as any).scene;
@@ -160,10 +166,23 @@ export class ThreeJSGLTFLoader {
         }
       }
       
+      // Gắn animations (nếu có) vào scene để component dùng AnimationMixer
+      const animations = (gltfData as any).animations || [];
+      (scene as any).animations = animations;
+      (scene as any).userData = { ...(scene as any).userData, animations };
+
       // ✅ VALIDATE SCENE HAS CONTENT
       if (!scene.children || scene.children.length === 0) {
         console.warn(`⚠️ Scene has no children - might be empty model`);
         throw new Error(`Model appears to be empty (no children in scene)`);
+      }
+
+      // ✅ ENHANCED GLB MATERIAL PROCESSING FOR COLORS
+      console.log(`🎨 Enhancing GLB materials for proper colors`);
+      try {
+        await this.enhanceScizorMaterials(scene);
+      } catch (enhanceErr) {
+        console.warn(`⚠️ Material enhancement failed:`, enhanceErr);
       }
       
       console.log(`✅ 3D scene extracted successfully with Three.js!`);
@@ -295,8 +314,8 @@ export class ThreeJSGLTFLoader {
           
           await Promise.race([downloadPromise, timeoutPromise]);
 
-          // ✅ FIX: Dùng Asset URI thay vì localUri cho THREE.TextureLoader
-          const textureUri = entry.asset.uri || entry.asset.localUri;
+          // ✅ FIX: Dùng localUri thay vì HTTP URI cho faster loading
+          const textureUri = entry.asset.localUri || entry.asset.uri;
           console.log(`🔍 Using texture URI: ${textureUri}`);
           
           // ✅ FIX: Tăng timeout và thêm retry logic
@@ -308,7 +327,7 @@ export class ThreeJSGLTFLoader {
               const fallbackTexture = new THREE.Texture();
               fallbackTexture.name = entry.name;
               resolve(fallbackTexture);
-            }, 10000); // ✅ TĂNG TIMEOUT TỪ 3s → 10s
+            }, 20000); // ✅ TĂNG TIMEOUT TỪ 10s → 20s
             
             loader.load(
               textureUri!,
@@ -354,6 +373,181 @@ export class ThreeJSGLTFLoader {
   }
 
   /**
+   * Enhanced Scizor materials with proper red colors
+   */
+  private async enhanceScizorMaterials(scene: THREE.Object3D): Promise<void> {
+    try {
+      console.log(`🦂 Enhancing Scizor materials with proper colors`);
+      
+      scene.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const material = child.material;
+          const meshName = child.name?.toLowerCase() || '';
+          
+          // ✅ SCIZOR-SPECIFIC COLOR MAPPING
+          if (meshName.includes('body') || meshName.includes('torso') || meshName.includes('chest')) {
+            // Main body - Red
+            material.color.setHex(0xCC0000);
+            material.metalness = 0.8;
+            material.roughness = 0.2;
+          } else if (meshName.includes('claw') || meshName.includes('pincer') || meshName.includes('arm')) {
+            // Claws - Metallic silver
+            material.color.setHex(0xC0C0C0);
+            material.metalness = 0.9;
+            material.roughness = 0.1;
+          } else if (meshName.includes('wing')) {
+            // Wings - Transparent blue-green
+            material.color.setHex(0x40E0D0);
+            material.transparent = true;
+            material.opacity = 0.7;
+            material.metalness = 0.3;
+            material.roughness = 0.8;
+          } else if (meshName.includes('eye')) {
+            // Eyes - Yellow
+            material.color.setHex(0xFFD700);
+            material.emissive.setHex(0x332200);
+            material.metalness = 0.1;
+            material.roughness = 0.9;
+          } else {
+            // Default parts - Dark red
+            material.color.setHex(0x990000);
+            material.metalness = 0.7;
+            material.roughness = 0.3;
+          }
+          
+          // ✅ ENSURE PROPER RENDERING
+          material.needsUpdate = true;
+          child.castShadow = true;
+          child.receiveShadow = true;
+          
+          console.log(`🎨 Enhanced material for: ${meshName || 'mesh'} - Color: #${material.color.getHexString()}`);
+        }
+      });
+      
+      console.log(`✅ Scizor materials enhanced successfully`);
+    } catch (error) {
+      console.error(`❌ Error enhancing Scizor materials:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load GLTF with external textures for proper colors
+   */
+  private async loadGLTFWithTextures(scene: THREE.Object3D, assetUri: string): Promise<void> {
+    try {
+      console.log(`🎨 Loading GLTF textures for proper colors`);
+      
+      // Load texture files
+      const textures = await this.preloadTextureAssets();
+      
+      // Apply textures to materials
+      this.applyPreloadedTextures(scene, textures);
+      
+      console.log(`✅ GLTF textures loaded successfully`);
+    } catch (error) {
+      console.error(`❌ Error loading GLTF textures:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Apply original textures from GLB file - FORCE ORIGINAL COLORS
+   */
+  private async applyOriginalTextures(scene: THREE.Object3D): Promise<void> {
+    try {
+      console.log(`🎨 FORCING ORIGINAL COLORS FROM GLB`);
+      
+      scene.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const material = child.material;
+          
+          // ✅ FORCE ORIGINAL TEXTURES - NO OVERRIDE
+          if (material.map) {
+            material.map.flipY = false;
+            material.map.wrapS = THREE.RepeatWrapping;
+            material.map.wrapT = THREE.RepeatWrapping;
+            console.log(`🎨 Original texture preserved: ${material.map.image?.src || 'embedded'}`);
+          }
+          
+          // ✅ CRITICAL: PRESERVE ORIGINAL COLORS - NO MODIFICATION
+          if (material.color) {
+            console.log(`🎨 ORIGINAL COLOR: #${material.color.getHexString()}`);
+            // DO NOT MODIFY THE COLOR - KEEP AS IS
+          }
+          
+          // ✅ FORCE MATERIAL TO USE ORIGINAL PROPERTIES
+          material.needsUpdate = true;
+          material.transparent = false;
+          material.opacity = 1.0;
+          material.alphaTest = 0;
+          
+          // ✅ CRITICAL: DO NOT OVERRIDE ANY COLOR PROPERTIES
+          // Remove any color overrides that might be applied
+          if (material.emissive) {
+            material.emissive.setHex(0x000000); // Reset emissive
+          }
+          
+          child.castShadow = true;
+          child.receiveShadow = true;
+          
+          console.log(`🎨 Material preserved for: ${child.name || 'mesh'}`);
+        }
+      });
+      
+      console.log(`✅ ORIGINAL COLORS FORCED - NO OVERRIDES`);
+    } catch (error) {
+      console.error(`❌ Error applying original textures:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Enhance GLB materials for better colors (without external textures)
+   */
+  private async enhanceGLBMaterials(scene: THREE.Object3D): Promise<void> {
+    try {
+      console.log(`⚡ Fast material enhancement`);
+      
+      scene.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const material = child.material;
+          
+          // ✅ QUICK ENHANCEMENT - NO DETAILED LOGGING
+          if (material.color) {
+            const originalColor = material.color.getHex();
+            // Brighten dark colors
+            if (originalColor < 0x333333) {
+              material.color.multiplyScalar(2.0);
+            }
+          }
+          
+          // ✅ QUICK PBR OPTIMIZATION
+          if (material.isMeshStandardMaterial || material.isMeshPhysicalMaterial) {
+            material.metalness = Math.max(material.metalness || 0, 0.7);
+            material.roughness = Math.min(material.roughness || 1, 0.3);
+            
+            if (material.map) {
+              material.map.flipY = false;
+            }
+          }
+          
+          // ✅ FORCE VISIBILITY
+          material.transparent = false;
+          material.opacity = 1.0;
+          material.needsUpdate = true;
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      
+      console.log(`✅ Fast enhancement completed`);
+    } catch (error) {
+      console.error(`❌ Enhancement error:`, error);
+    }
+  }
+
+  /**
    * Apply preloaded textures to materials
    */
   private async applyPreloadedTextures(scene: THREE.Object3D, textureAssets: Array<{name: string, asset: Asset, texture?: THREE.Texture}>): Promise<void> {
@@ -364,12 +558,55 @@ export class ThreeJSGLTFLoader {
         if (child.isMesh && child.material) {
           const material = child.material;
           
-          // Find matching texture based on material name
+          // ✅ DEBUG: LOG MATERIAL INFO
+          console.log(`🔍 Found mesh "${child.name}" with material "${material.name}" (has map: ${!!material.map})`);
+          
+          // ✅ ADVANCED TEXTURE MATCHING - MATCH THEO TÊN CHÍNH XÁC
+          let matchingTexture = null;
+          
+          // Debug: Log tất cả material và mesh names
+          console.log(`🔍 Checking material "${material.name}" on mesh "${child.name}"`);
+          
           if (material.name) {
-            const matchingTexture = textureAssets.find(ta => 
-              material.name.includes(ta.name.split('_')[0]) || // Eye.002 matches Eye
-              ta.name.toLowerCase().includes(material.name.toLowerCase())
-            );
+            // Thử match chính xác theo tên material
+            matchingTexture = textureAssets.find(ta => {
+              const textureName = ta.name.toLowerCase();
+              const materialName = material.name.toLowerCase();
+              
+              // Exact match: "Eye.002" matches "Eye.002_baseColor"
+              if (textureName.includes(materialName.replace('.', ''))) return true;
+              
+              // Partial match: "eye" in material name matches "eye" in texture name
+              if (materialName.includes('eye') && textureName.includes('eye')) return true;
+              if (materialName.includes('mouth') && textureName.includes('mouth')) return true;
+              if (materialName.includes('wing') && textureName.includes('wing')) return true;
+              
+              // Generic match
+              return materialName.includes(textureName.split('_')[0]) || 
+                     textureName.includes(materialName.split('.')[0]);
+            });
+          }
+          
+          // ✅ FALLBACK: MATCH THEO MESH NAME
+          if (!matchingTexture && child.name) {
+            matchingTexture = textureAssets.find(ta => {
+              const textureName = ta.name.toLowerCase();
+              const meshName = child.name.toLowerCase();
+              
+              if (meshName.includes('eye') && textureName.includes('eye')) return true;
+              if (meshName.includes('mouth') && textureName.includes('mouth')) return true;
+              if (meshName.includes('wing') && textureName.includes('wing')) return true;
+              
+              return meshName.includes(textureName.split('_')[0]);
+            });
+          }
+          
+          // ✅ LAST RESORT: AUTO-ASSIGN TEXTURES TO MATERIALS WITHOUT MAPS
+          if (!matchingTexture && !material.map && textureAssets.length > 0) {
+            // Assign first available texture to materials without existing textures
+            matchingTexture = textureAssets[0];
+            console.log(`🎨 Auto-assigning texture ${matchingTexture.name} to material ${material.name}`);
+          }
             
             if (matchingTexture && matchingTexture.texture) {
               // ✅ GIẢM LOG SPAM - CHỈ LOG KHI CẦN THIẾT
@@ -377,11 +614,45 @@ export class ThreeJSGLTFLoader {
               
               // Apply texture to material
               material.map = matchingTexture.texture;
+              
+              // ✅ FORCE TEXTURE PROPERTIES FOR VISIBILITY
+              material.map.flipY = false; // GLB standard
+              material.map.wrapS = THREE.RepeatWrapping;
+              material.map.wrapT = THREE.RepeatWrapping;
+              
               material.needsUpdate = true;
+            } else {
+              // ✅ NẾU KHÔNG CÓ TEXTURE, TẠO MÀU SCIZOR MẶC ĐỊNH
+              console.log(`🎨 No texture for material ${material.name}, applying Scizor colors`);
+              
+              const materialName = (material.name || '').toLowerCase();
+              if (materialName.includes('eye')) {
+                material.color.setHex(0xFF0000); // Đỏ cho mắt
+              } else if (materialName.includes('mouth')) {
+                material.color.setHex(0x333333); // Đen cho miệng
+              } else if (materialName.includes('wing')) {
+                material.color.setHex(0x888888); // Xám cho cánh
+              } else if (materialName.includes('body')) {
+                material.color.setHex(0xCC0000); // Đỏ cho thân
+              } else if (materialName.includes('claw')) {
+                material.color.setHex(0xFFD700); // Vàng cho móng
+              } else {
+                material.color.setHex(0xFF4444); // Đỏ mặc định
+              }
+              
+              // ✅ PBR PROPERTIES CHO MÀU RÕ RÀNG
+              if (material.isMeshStandardMaterial || material.isMeshPhysicalMaterial) {
+                material.metalness = 0.2; // ít kim loại
+                material.roughness = 0.8; // nhám để màu rõ
+                material.emissive.setHex(0x000000);
+                material.emissiveIntensity = 0;
+              }
             }
-          }
           
-          // Ensure material properties for visibility
+          // ✅ FORCE MATERIAL VISIBILITY
+          material.transparent = false;
+          material.opacity = 1.0;
+          material.alphaTest = 0;
           material.needsUpdate = true;
           child.castShadow = true;
           child.receiveShadow = true;

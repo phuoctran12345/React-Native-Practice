@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert, TouchableWithoutFeedback } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert, TouchableWithoutFeedback, Dimensions, Platform } from 'react-native';
 import { Camera, CameraView } from 'expo-camera';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
 import * as THREE from 'three';
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
-import { glbLoader, GLBModelConfig } from '../utils/DynamicGLBLoader';
-import { threeJSGLTFLoader } from '../utils/ThreeJSGLTFLoader';
-import { getGLBModelFromQRData } from '../utils/modelData';
+import { getGLBModelFromQRData, getGLBModelConfig } from '../utils/modelData';
 
 interface PokemonARViewerProps {
   onClose: () => void;
@@ -24,12 +22,27 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const modelRef = useRef<THREE.Object3D | null>(null);
   const rotationRef = useRef({ x: 0, y: 0 });
   const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const clockRef = useRef(new THREE.Clock());
   const [scannedData, setScannedData] = useState<string | null>(null);
+  const [currentAnimation, setCurrentAnimation] = useState<string>('idle');
+  const [animationFeedback, setAnimationFeedback] = useState<string>('');
 
   // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ VÀ ZOOM - SỬA LỖI!
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
   const [initialDistance, setInitialDistance] = useState<number | null>(null);
   const [currentScale, setCurrentScale] = useState<number>(1);
+  
+  // ✅ TC3.2: SWIPE GESTURE TRACKING
+  const [swipeStart, setSwipeStart] = useState<{ x: number; y: number; time: number } | null>(null);
+  const [isSwipeGesture, setIsSwipeGesture] = useState(false);
+  
+  // ✅ TC6.2: SCREEN COMPATIBILITY
+  const screenData = Dimensions.get('window');
+  const isIOS = Platform.OS === 'ios';
+  const hasNotch = screenData.height > 800; // Approximate notch detection
   
   // ✅ HELPER FUNCTION ĐỂ TÍNH KHOẢNG CÁCH GIỮA 2 TOUCH
   const getDistance = (touch1: any, touch2: any) => {
@@ -38,14 +51,188 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     return Math.sqrt(dx * dx + dy * dy);
   };
 
+  // ✅ TC3.1: RAYCASTING FOR TOUCH ANIMATION TRIGGER
+  const performRaycasting = (touchX: number, touchY: number, screenWidth: number, screenHeight: number) => {
+    if (!modelRef.current || !cameraRef.current || !rendererRef.current) return null;
+
+    // Convert screen coordinates to normalized device coordinates (-1 to +1)
+    const mouse = new THREE.Vector2();
+    mouse.x = (touchX / screenWidth) * 2 - 1;
+    mouse.y = -(touchY / screenHeight) * 2 + 1;
+
+    // Create raycaster
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, cameraRef.current);
+
+    // Check intersection with model
+    const intersects = raycaster.intersectObject(modelRef.current, true);
+    
+    if (intersects.length > 0) {
+      console.log('🎯 Model touched! Triggering animation...');
+      return intersects[0];
+    }
+    return null;
+  };
+
+  // ✅ TC3.1: TRIGGER ANIMATION ON TOUCH
+  const triggerTouchAnimation = (animationName: string = 'hit') => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+    
+    if (clips.length > 0) {
+      // Find animation clip
+      const clip = clips.find((c: any) => 
+        c.name?.toLowerCase().includes(animationName.toLowerCase())
+      ) || clips[Math.floor(Math.random() * clips.length)]; // Random if not found
+
+      // Stop current action and play new one
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(clip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+
+      setCurrentAnimation(animationName);
+      setAnimationFeedback(`🎯 ${animationName.toUpperCase()}!`);
+      console.log(`🎬 Playing touch animation: ${clip.name || animationName}`);
+
+      // Clear feedback after short time
+      setTimeout(() => setAnimationFeedback(''), 1000);
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, clip.duration * 1000 || 2000);
+    }
+  };
+
+  // ✅ TC3.2: SWIPE GESTURE DETECTION AND THROW ANIMATION
+  const detectSwipeGesture = (startX: number, startY: number, endX: number, endY: number, duration: number) => {
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    const velocity = distance / duration; // pixels per ms
+    
+    // Swipe thresholds
+    const minDistance = 100; // minimum swipe distance
+    const minVelocity = 0.5; // minimum swipe velocity
+    
+    if (distance > minDistance && velocity > minVelocity) {
+      // Determine swipe direction
+      const angle = Math.atan2(deltaY, deltaX);
+      const direction = {
+        horizontal: Math.abs(deltaX) > Math.abs(deltaY),
+        vertical: Math.abs(deltaY) > Math.abs(deltaX),
+        right: deltaX > 0,
+        left: deltaX < 0,
+        up: deltaY < 0,
+        down: deltaY > 0
+      };
+      
+      console.log(`🏐 Swipe detected! Distance: ${distance.toFixed(2)}, Velocity: ${velocity.toFixed(2)}, Direction:`, direction);
+      
+      // Trigger throw animation based on direction
+      if (direction.horizontal) {
+        triggerThrowAnimation(direction.right ? 'throw_right' : 'throw_left', velocity);
+      } else if (direction.vertical) {
+        triggerThrowAnimation(direction.up ? 'throw_up' : 'throw_down', velocity);
+      }
+      
+      return true;
+    }
+    return false;
+  };
+
+  // ✅ TC3.2: TRIGGER THROW ANIMATION
+  const triggerThrowAnimation = (throwType: string, velocity: number) => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+    
+    if (clips.length > 0) {
+      // Find throw animation or use attack/fly animation
+      const throwClip = clips.find((c: any) => 
+        c.name?.toLowerCase().includes('attack') ||
+        c.name?.toLowerCase().includes('fly') ||
+        c.name?.toLowerCase().includes('jump')
+      ) || clips[Math.floor(Math.random() * clips.length)];
+
+      // Stop current action and play throw animation
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(throwClip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      
+      // Adjust playback speed based on swipe velocity
+      const speedMultiplier = Math.min(Math.max(velocity / 2, 0.5), 3.0);
+      action.setEffectiveTimeScale(speedMultiplier);
+      action.play();
+
+      setCurrentAnimation(throwType);
+      setAnimationFeedback(`🏐 ${throwType.replace('_', ' ').toUpperCase()}!`);
+      console.log(`🎬 Playing throw animation: ${throwClip.name || throwType} (speed: ${speedMultiplier.toFixed(2)}x)`);
+
+      // Clear feedback after animation
+      setTimeout(() => setAnimationFeedback(''), 1500);
+
+      // Add visual feedback - temporary scale effect
+      if (modelRef.current) {
+        const originalScale = (modelRef.current as any).originalScale || 0.6;
+        const scaleEffect = originalScale * (1 + velocity * 0.1);
+        modelRef.current.scale.setScalar(scaleEffect);
+        
+        // Return to normal scale
+        setTimeout(() => {
+          if (modelRef.current) {
+            modelRef.current.scale.setScalar(originalScale);
+          }
+        }, 200);
+      }
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, (throwClip.duration * 1000 / speedMultiplier) || 1500);
+    }
+  };
+
   const handleTouchStart = (event: any) => {
     const touches = event.nativeEvent.touches;
     console.log(`👆 Touch start: ${touches.length} fingers`);
     
     if (touches.length === 1) {
-      // Single touch - rotation
-      setTouchStart({ x: touches[0].pageX, y: touches[0].pageY });
-      console.log(`🔄 Single touch - rotation mode`);
+      const touch = touches[0];
+      
+      // ✅ TC3.1: RAYCASTING CHECK FOR MODEL TOUCH - TC6.2: USE ACTUAL SCREEN DIMENSIONS
+      const intersection = performRaycasting(touch.pageX, touch.pageY, screenData.width, screenData.height);
+      
+      if (intersection) {
+        // Model was touched - trigger animation
+        triggerTouchAnimation('hit');
+      } else {
+        // Empty space touched - could be rotation or swipe
+        setTouchStart({ x: touch.pageX, y: touch.pageY });
+        setSwipeStart({ x: touch.pageX, y: touch.pageY, time: Date.now() });
+        setIsSwipeGesture(false);
+        console.log(`🔄 Single touch - rotation/swipe mode`);
+      }
     } else if (touches.length === 2) {
       // Multi touch - zoom
       const distance = getDistance(touches[0], touches[1]);
@@ -100,9 +287,32 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     }
   };
   
-  const handleTouchEnd = () => {
+  const handleTouchEnd = (event: any) => {
+    console.log(`👆 Touch end`);
+    
+    // ✅ TC3.2: CHECK FOR SWIPE GESTURE ON TOUCH END
+    if (swipeStart && !isSwipeGesture) {
+      const touch = event.nativeEvent.changedTouches[0];
+      const endTime = Date.now();
+      const duration = endTime - swipeStart.time;
+      
+      const wasSwipe = detectSwipeGesture(
+        swipeStart.x, 
+        swipeStart.y, 
+        touch.pageX, 
+        touch.pageY, 
+        duration
+      );
+      
+      if (wasSwipe) {
+        setIsSwipeGesture(true);
+      }
+    }
+    
     setTouchStart(null);
+    setSwipeStart(null);
     setInitialDistance(null);
+    setIsSwipeGesture(false);
     
     // ✅ RESET USER ROTATING FLAG SAU 1 GIÂY
     setTimeout(() => {
@@ -136,12 +346,42 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   useEffect(() => {
     requestCameraPermission();
+    
+    // ✅ PRELOAD MODELS NGAY KHI KHỞI ĐỘNG APP
+    preloadModels();
+    
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
     };
   }, []);
+
+  // ✅ PRELOAD MODELS FOR INSTANT LOADING
+  const preloadModels = async () => {
+    try {
+      console.log('⚡ Preloading models for instant access...');
+      
+      // ✅ PRELOAD SCIZOR MODEL - DIRECT LOADING
+      try {
+        const scizorModuleId = require('../assets/models/pokemon_scizor.glb');
+        console.log('✅ Scizor model preloaded! ModuleId:', scizorModuleId);
+      } catch (error) {
+        console.log('⚠️ Scizor preload failed:', error);
+      }
+      
+      // ✅ PRELOAD FOX MODEL - DIRECT LOADING
+      try {
+        const foxModuleId = require('../assets/models/Fox.glb');
+        console.log('✅ Fox model preloaded! ModuleId:', foxModuleId);
+      } catch (error) {
+        console.log('⚠️ Fox preload failed:', error);
+      }
+      
+    } catch (error) {
+      console.log('⚠️ Preload failed, will load on demand:', error);
+    }
+  };
 
   const requestCameraPermission = async () => {
     const { status } = await Camera.requestCameraPermissionsAsync();
@@ -181,6 +421,53 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const rightArm = new THREE.Mesh(armGeometry, armMaterial);
       rightArm.position.set(0.4, 0.2, 0);
       group.add(rightArm);
+      
+    } else if (config.id.includes('fox')) {
+      // ✅ FOX FALLBACK MODEL
+      console.log('🦊 Creating Fox fallback model');
+      
+      // Body (màu cam)
+      const bodyGeometry = new THREE.CylinderGeometry(0.2, 0.3, 0.6, 8);
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xFF8C00 });
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+      body.position.y = 0;
+      group.add(body);
+      
+      // Head (màu cam đậm)
+      const headGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+      const headMaterial = new THREE.MeshStandardMaterial({ color: 0xFF4500 });
+      const head = new THREE.Mesh(headGeometry, headMaterial);
+      head.position.y = 0.5;
+      group.add(head);
+      
+      // Ears (màu cam)
+      const earGeometry = new THREE.ConeGeometry(0.08, 0.15, 6);
+      const earMaterial = new THREE.MeshStandardMaterial({ color: 0xFF4500 });
+      
+      const leftEar = new THREE.Mesh(earGeometry, earMaterial);
+      leftEar.position.set(-0.1, 0.7, 0);
+      leftEar.rotation.z = -0.2;
+      group.add(leftEar);
+      
+      const rightEar = new THREE.Mesh(earGeometry, earMaterial);
+      rightEar.position.set(0.1, 0.7, 0);
+      rightEar.rotation.z = 0.2;
+      group.add(rightEar);
+      
+      // Tail (màu cam với đuôi trắng)
+      const tailGeometry = new THREE.CylinderGeometry(0.05, 0.1, 0.4, 6);
+      const tailMaterial = new THREE.MeshStandardMaterial({ color: 0xFF8C00 });
+      const tail = new THREE.Mesh(tailGeometry, tailMaterial);
+      tail.position.set(0, 0.1, -0.3);
+      tail.rotation.x = Math.PI / 4;
+      group.add(tail);
+      
+      // Tail tip (màu trắng)
+      const tailTipGeometry = new THREE.SphereGeometry(0.08, 6, 6);
+      const tailTipMaterial = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+      const tailTip = new THREE.Mesh(tailTipGeometry, tailTipMaterial);
+      tailTip.position.set(0, 0.3, -0.5);
+      group.add(tailTip);
       
     } else {
       // Generic Pokemon fallback
@@ -225,90 +512,137 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         setLoadingProgress(30);
         
         try {
-          // ✅ SỬ DỤNG THREE.JS GLTFLOADER CHO 100% CHÍNH XÁC
-          console.log(`🎯 Using Three.js GLTFLoader for 100% accuracy`);
+          // ✅ DIRECT GLB LOADING FOR PERFECT COLORS
+          console.log(`🎯 Using DIRECT GLB loading for perfect colors`);
           setLoadingProgress(40);
           setModelInfo(`Đang tải model ${glbConfig.name}...`);
           
-          // ✅ BỎ TIMEOUT CỨNG 15s: tiếp tục chờ và cập nhật trạng thái
-          //    Tránh rơi vào fallback do mạng chậm / texture chậm
-          setModelInfo(`Đang tải model ${glbConfig.name} (có thể mất 10-20s lần đầu)...`);
-          const loadedModel = await threeJSGLTFLoader.loadModel(glbConfig);
+          // ✅ REAL MODEL LOADING - TRY ASSET LOADING FIRST
+          console.log('🎯 Attempting to load real model...');
           
-          // Apply config settings
-          if (glbConfig.scale) {
-            loadedModel.scale.setScalar(glbConfig.scale);
-          }
-          
-          setLoadingProgress(70);
-          setModelInfo(`Đang áp dụng cài đặt...`);
-          
-          // ✅ FIX: ĐẶT MODEL Ở VỊ TRÍ TỐI ƯU ĐỂ THẤY TOÀN BỘ
-          loadedModel.position.set(0, -0.5, 0); // Hạ xuống một chút để thấy đầy đủ
-          
-          setLoadingProgress(85);
-          setModelInfo(`Đang tối ưu materials...`);
-          
-          // ✅ GIỮ NGUYÊN MÀU SẮC GỐC - CHỈ ĐẢM BẢO MATERIAL HOẠT ĐỘNG
-          loadedModel.traverse((child: any) => {
-            if (child.isMesh && child.material) {
-              // Chỉ đảm bảo material hoạt động, KHÔNG thay đổi màu sắc
-              child.material.needsUpdate = true;
-              child.castShadow = true;
-              child.receiveShadow = true;
+          try {
+            // ✅ METHOD 1: Direct require + loadAsync với error handling
+            const { loadAsync } = await import('expo-three');
+            let moduleId;
+            
+            // ✅ SAFE REQUIRE với try-catch
+            try {
+              if (glbConfig.filePath === 'assets/models/pokemon_scizor.glb') {
+                moduleId = require('../assets/models/pokemon_scizor.glb');
+              } else if (glbConfig.filePath === 'assets/models/Fox.glb') {
+                moduleId = require('../assets/models/Fox.glb');
+              } else {
+                throw new Error(`Unknown model filePath: ${glbConfig.filePath}`);
+              }
+            } catch (requireError) {
+              console.error('❌ Error requiring model file:', requireError);
+              throw new Error(`Model file not found: ${glbConfig.filePath}`);
             }
-          });
-          
-          if (glbConfig.rotation) {
-            loadedModel.rotation.set(
-              glbConfig.rotation.x,
-              glbConfig.rotation.y,
-              glbConfig.rotation.z
-            );
-          }
-          
-          modelRef.current = loadedModel;
-          
-          // ✅ ADD MODEL VÀO SCENE - QUAN TRỌNG!
-          if (sceneRef.current) {
-            sceneRef.current.add(loadedModel);
-            console.log('🎉 Model added to scene successfully!');
-          }
-          
-          // Store original scale for animation
-          (loadedModel as any).originalScale = glbConfig.scale || 1;
-          
-          // ✅ BREATHING ANIMATION - SỬA LỖI!
-          const breathingAnimation = () => {
-            if (loadedModel && !(loadedModel as any).isFallback) {
-              const time = Date.now() * 0.001;
-              const originalScale = (loadedModel as any).originalScale || glbConfig.scale || 1;
-              const breathingScale = originalScale + Math.sin(time * 2) * 0.15; // ✅ TĂNG BREATHING EFFECT
-              loadedModel.scale.setScalar(breathingScale);
+            
+            // ✅ VALIDATE MODULE ID
+            if (!moduleId) {
+              throw new Error(`Module ID is undefined for: ${glbConfig.filePath}`);
             }
-          };
-          
-          (loadedModel as any).animate = breathingAnimation;
-          (loadedModel as any).originalScale = glbConfig.scale || 1;
-          (loadedModel as any).isUserRotating = false; // ✅ ĐỂ AUTO-ROTATION HOẠT ĐỘNG
-          
-          setLoadingProgress(95);
-          setModelInfo(`Đang thêm vào scene...`);
-          
-          setLoadingProgress(100);
-          setModelInfo(`✅ ${glbConfig.name} đã sẵn sàng!`);
-          console.log('🚀 Pokemon model loaded successfully:', glbConfig.name);
+            
+            console.log('✅ Loading moduleId:', moduleId);
+            const gltf = await loadAsync(moduleId);
+            
+            if (!gltf.scene) {
+              throw new Error('No scene found in GLB file');
+            }
+            
+            const loadedModel = gltf.scene;
+            
+            // Apply config settings
+            if (glbConfig.scale) {
+              loadedModel.scale.setScalar(glbConfig.scale);
+            }
+            
+            setLoadingProgress(70);
+            setModelInfo(`Đang áp dụng cài đặt...`);
+            
+            // Position model
+            loadedModel.position.set(0, -0.5, 0);
+            
+            setLoadingProgress(85);
+            setModelInfo(`Đang tối ưu materials...`);
+            
+            // Apply rotation
+            if (glbConfig.rotation) {
+              loadedModel.rotation.set(
+                glbConfig.rotation.x,
+                glbConfig.rotation.y,
+                glbConfig.rotation.z
+              );
+            }
+            
+            modelRef.current = loadedModel;
+            
+            // Add to scene
+            if (sceneRef.current) {
+              loadedModel.renderOrder = -1;
+              sceneRef.current.add(loadedModel);
+              console.log('🎉 Real model added to scene successfully!');
+            }
+            
+            // Store original scale
+            (loadedModel as any).originalScale = glbConfig.scale || 1;
+            (loadedModel as any).isUserRotating = false;
+            
+            setLoadingProgress(100);
+            setModelInfo(`✅ ${glbConfig.name} đã sẵn sàng!`);
+            console.log('🚀 Real model loaded successfully:', glbConfig.name);
+            return;
+            
+          } catch (realLoadError) {
+            console.log('⚠️ Real model loading failed, using fallback:', realLoadError);
+            
+            // ✅ DETAILED ERROR ANALYSIS
+            const errorMessage = (realLoadError as Error).message;
+            if (errorMessage?.includes('replace')) {
+              console.error('❌ Asset URI issue - trying alternative loading method');
+              setModelInfo('Lỗi tải asset - thử phương pháp khác...');
+            } else if (errorMessage?.includes('undefined')) {
+              console.error('❌ Undefined property - asset not loaded properly');
+              setModelInfo('Asset không tải được - kiểm tra file GLB');
+            } else {
+              setModelInfo(`❌ Không thể tải ${glbConfig.name}: ${errorMessage}`);
+            }
+            
+            // ✅ FALLBACK MODEL LOADING
+            const fallbackModel = createFallbackModel(glbConfig);
+            modelRef.current = fallbackModel;
+            if (sceneRef.current) {
+              sceneRef.current.add(fallbackModel);
+            }
+            
+            setLoadingProgress(100);
+            setModelInfo(`✅ ${glbConfig.name} (Fallback) đã sẵn sàng!`);
+            console.log('🚀 Fallback model loaded successfully:', glbConfig.name);
+            return;
+          }
           
         } catch (glbError) {
           console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
+          
+          // ✅ DETAILED ERROR ANALYSIS
+          const errorMessage = (glbError as Error).message;
+          if (errorMessage?.includes('replace')) {
+            console.error('❌ Asset URI issue - trying alternative loading method');
+            setModelInfo('Lỗi tải asset - thử phương pháp khác...');
+          } else if (errorMessage?.includes('undefined')) {
+            console.error('❌ Undefined property - asset not loaded properly');
+            setModelInfo('Asset không tải được - kiểm tra file GLB');
+          } else {
+            setModelInfo(`❌ Không thể tải ${glbConfig.name}: ${errorMessage}`);
+          }
+          
           console.error(`❌ Error details:`, {
-            message: (glbError as Error).message,
+            message: errorMessage,
             stack: (glbError as Error).stack,
             config: glbConfig,
             filePath: glbConfig.filePath
           });
-          console.error(`❌ Full error object:`, glbError);
-          setModelInfo(`❌ Không thể tải ${glbConfig.name}`);
           
           // Tạo fallback model thay vì show error
           const fallbackModel = createFallbackModel(glbConfig);
@@ -357,7 +691,8 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     try {
       // Thiết lập Scene, Camera, Renderer
       const scene = new THREE.Scene();
-      sceneRef.current = scene; // Lưu scene reference
+      const camera = new THREE.PerspectiveCamera(75, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
+      const renderer = new Renderer({ gl });
       
       // ✅ Nếu model đã được load trước đó, add vào scene ngay
       if (modelRef.current) {
@@ -365,66 +700,101 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         console.log('🔄 Adding existing model to new scene');
       }
       
-      const camera = new THREE.PerspectiveCamera(
-        75,
-        gl.drawingBufferWidth / gl.drawingBufferHeight,
-        0.1,
-        1000
-      );
-      
-      const renderer = new Renderer({ gl });
+      // ✅ SETUP CAMERA
+      camera.position.set(0, 0.6, 6.5); // ✅ nâng camera + lùi ra một chút
+      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
+      
+      // ✅ MÀU SẮC CHUẨN SRGB CHO ĐỘ CHÍNH XÁC CAO
+      // @ts-ignore - tương thích nhiều phiên bản three
+      if ((renderer as any).outputColorSpace !== undefined) {
+        // @ts-ignore
+        (renderer as any).outputColorSpace = THREE.SRGBColorSpace;
+      } else {
+        // @ts-ignore
+        renderer.outputEncoding = THREE.sRGBEncoding;
+      }
+      
+      // ✅ PBR RENDERING CHO MÀU SẮC CHÍNH XÁC
+      // @ts-ignore
+      renderer.physicallyCorrectLights = true;
+      // @ts-ignore
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      // @ts-ignore
+      renderer.toneMappingExposure = 1.2; // Tăng exposure cho màu sắc rõ hơn
+      
+      // ✅ SHADOW SETTINGS CHO CHI TIẾT
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-      // ✅ FIX: ĐẶT CAMERA ĐỂ MODEL LUÔN CHÍNH GIỮA MÀN HÌNH
-      camera.position.set(0, 0, 6); // Khoảng cách vừa phải
-      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
+      // ✅ STORE REFERENCES
+      sceneRef.current = scene; // Lưu scene reference
+      cameraRef.current = camera; // Lưu camera reference cho raycasting
+      rendererRef.current = renderer; // Lưu renderer reference
 
-      // ✅ ÁNH SÁNG TỐI ƯU CHO TEXTURE GLTF!
-      // Ambient light vừa phải để không làm mất chi tiết
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-      scene.add(ambientLight);
+        // ✅ ÁNH SÁNG TỐI ƯU CHO MÀU ĐỎ SCIZOR
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Tăng ambient cho màu đỏ
+        scene.add(ambientLight);
 
-      // Directional light chính - không quá mạnh
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      // ✅ DIRECTIONAL LIGHT CHÍNH - CHIẾU SÁNG MẠNH CHO MÀU ĐỎ
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5); // Tăng cường độ cho màu đỏ
       directionalLight.position.set(2, 5, 3);
       directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
       scene.add(directionalLight);
 
-      // Ánh sáng từ nhiều góc để hiển thị texture đúng
-      const leftLight = new THREE.DirectionalLight(0xffffff, 0.4);
-      leftLight.position.set(-3, 2, 2);
+      // ✅ ÁNH SÁNG BỔ SUNG CHO MÀU SẮC RÕ RÀNG
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      leftLight.position.set(-4, 3, 3);
       scene.add(leftLight);
 
-      const rightLight = new THREE.DirectionalLight(0xffffff, 0.4);
-      rightLight.position.set(3, 2, 2);
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      rightLight.position.set(4, 3, 3);
       scene.add(rightLight);
       
-      // Point light nhẹ để tạo độ sáng tự nhiên
-      const pointLight = new THREE.PointLight(0xffffff, 0.3, 50);
-      pointLight.position.set(0, 2, 5);
+      // ✅ POINT LIGHT CHO CHI TIẾT
+      const pointLight = new THREE.PointLight(0xffffff, 0.8, 30);
+      pointLight.position.set(0, 3, 4);
       scene.add(pointLight);
+      
+      // ✅ RIM LIGHT CHO WINGS
+      const rimLight = new THREE.DirectionalLight(0x88ccff, 0.5);
+      rimLight.position.set(0, 0, -5);
+      scene.add(rimLight);
 
       // ✅ ANIMATION LOOP - TỐI ƯU HIỆU SUẤT!
       const animate = () => {
-        timeoutRef.current = setTimeout(animate, 1000 / 30); // ✅ GIẢM TỪ 60 FPS → 30 FPS
+        timeoutRef.current = setTimeout(animate, 1000 / 30); // ✅ GIẢM XUỐNG 30 FPS CHO HIỆU SUẤT
+
+        // ✅ UPDATE ANIMATION MIXER
+        const delta = clockRef.current.getDelta();
+        if (mixerRef.current) {
+          mixerRef.current.update(delta);
+        }
 
         if (modelRef.current) {
           const time = Date.now() * 0.001;
+
+          // Update AnimationMixer nếu có
+          if ((modelRef.current as any).updateMixer) {
+            (modelRef.current as any).updateMixer(delta);
+          }
           
           // ✅ BREATHING ANIMATION - TỐI ƯU!
           if ((modelRef.current as any).animate) {
             (modelRef.current as any).animate();
           } else {
-            // ✅ GIẢM TÍNH TOÁN - CHỈ KHI CẦN THIẾT
+            // ✅ TỐI ƯU BREATHING - CHỈ KHI CẦN THIẾT
             const originalScale = (modelRef.current as any).originalScale || 1;
-            const breathingScale = originalScale + Math.sin(time * 1.5) * 0.05; // ✅ GIẢM FREQUENCY
+            const breathingScale = originalScale + Math.sin(time * 1.0) * 0.03; // ✅ GIẢM FREQUENCY VÀ AMPLITUDE
             modelRef.current.scale.setScalar(breathingScale);
           }
           
           // ✅ TỰ ĐỘNG XOAY - GIẢM TỐC ĐỘ
           if (!(modelRef.current as any).isUserRotating) {
-            modelRef.current.rotation.y += 0.01; // ✅ GIẢM TỪ 0.02 → 0.01
+            modelRef.current.rotation.y += 0.02; // ✅ TĂNG NHẸ để thấy rõ
           }
           
           // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN
@@ -524,18 +894,23 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             📱 Quét QR code để hiển thị Pokemon 3D
           </Text>
         ) : (
-          <Text style={styles.instruction}>
-            🦂 {modelInfo || 'Pokemon đã sẵn sàng!'}
-          </Text>
+          <View>
+            <Text style={styles.instruction}>
+              🦂 {modelInfo || 'Pokemon đã sẵn sàng!'}
+            </Text>
+            {/* ✅ TC6.1: ANIMATION FEEDBACK UI */}
+            {animationFeedback && (
+              <Text style={styles.animationFeedback}>
+                {animationFeedback}
+              </Text>
+            )}
+          </View>
         )}
         
-        {scannedData && (
-          <Text style={styles.subInstruction}>
-            👆 Vuốt để xoay 360° • 🤏 Pinch để zoom in/out • 📱 Di chuyển điện thoại để xem từ các góc độ khác
-          </Text>
-        )}
+        {/* ✅ REMOVED INSTRUCTION TEXT AS REQUESTED */}
 
-        {scannedData && (
+        {/* ✅ CHỈ HIỆN KHI ĐANG LOADING ĐỂ TRÁNH RỐI UI */}
+        {scannedData && isLoading && (
           <Text style={styles.scannedData}>
             🔍 Đã quét: {scannedData}
           </Text>
@@ -583,19 +958,28 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: 'space-between',
+    zIndex: 1000, // ✅ UI ELEMENTS LUÔN Ở TRÊN 3D MODEL
     alignItems: 'center',
-    paddingVertical: 50,
+    // ✅ TC6.2: ADAPTIVE PADDING FOR DIFFERENT DEVICES
+    paddingTop: Platform.OS === 'ios' ? (Dimensions.get('window').height > 800 ? 60 : 40) : 30,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 30,
+    paddingHorizontal: 20,
   },
   instruction: {
     color: '#fff',
-    fontSize: 18,
+    // ✅ TC6.2: RESPONSIVE FONT SIZE
+    fontSize: Dimensions.get('window').width < 375 ? 16 : 18,
     fontWeight: 'bold',
     textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.8)', // ✅ TĂNG OPACITY CHO RÕ RÀNG
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 10,
     marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)', // ✅ VIỀN TRẮNG NHẸ
+    // ✅ TC6.2: ENSURE VISIBILITY ON ALL DEVICES
+    maxWidth: Dimensions.get('window').width - 40,
   },
   subInstruction: {
     color: '#fff',
@@ -628,6 +1012,24 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  // ✅ TC6.1: ANIMATION FEEDBACK STYLES
+  animationFeedback: {
+    color: '#FFD700',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 10,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
   },
   loadingContainer: {
     position: 'absolute',

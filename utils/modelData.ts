@@ -35,11 +35,20 @@ export const GLB_MODEL_DATABASE: { [key: string]: GLBModelConfig } = {
   'scizor': {
     id: 'scizor',
     name: 'Scizor',
-    filePath: 'assets/models/pokemon_concua/pokemon_scizor.glb', // ✅ DÙNG GLB (EMBED TEXTURES) CHO ỔN ĐỊNH
-    scale: 0.8, // ✅ TĂNG SCALE ĐỂ THẤY RÕ HƠN VÀ THÂN THIỆN
-    position: { x: 0, y: -1.2, z: 0 }, // ✅ HẠ XUỐNG NHIỀU HƠN ĐỂ Ở GIỮA MÀNG HÌNH
+    filePath: 'assets/models/pokemon_scizor.glb', // ✅ USE ROOT LEVEL FILE
+    scale: 0.6, // ✅ SCALE PHÙ HỢP
+    position: { x: 0, y: -0.8, z: 0 }, // ✅ VỊ TRÍ CHÍNH GIỮA
     rotation: { x: 0, y: 0, z: 0 },
     animations: ['idle', 'attack', 'fly'],
+  },
+  'fox': {
+    id: 'fox',
+    name: 'Fox',
+    filePath: 'assets/models/Fox.glb', // ✅ NEW FOX MODEL
+    scale: 0.8, // ✅ SCALE PHÙ HỢP CHO FOX
+    position: { x: 0, y: -0.5, z: 0 }, // ✅ VỊ TRÍ CHÍNH GIỮA
+    rotation: { x: 0, y: 0, z: 0 },
+    animations: ['idle', 'walk', 'run'],
   },
   'scizor_concua': {
     id: 'scizor_concua',

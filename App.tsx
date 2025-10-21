@@ -66,8 +66,10 @@ import Demo from './components/Demo';
 import ARScreen from './screens/ARScreen';
 import PureARScreen from './screens/PureARScreen';
 import PokemonARViewer from './components/PokemonARViewer';
+import SimpleARViewer from './components/SimpleARViewer';
+import OptimizedARViewer from './components/OptimizedARViewer';
 
-type AppMode = 'menu' | 'sketchfab' | 'ar' | 'pure-ar' | 'pokemon-ar';
+type AppMode = 'menu' | 'sketchfab' | 'ar' | 'pure-ar' | 'pokemon-ar' | 'simple-ar' | 'optimized-ar';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>('menu');
@@ -117,8 +119,28 @@ export default function App() {
             onPress={() => setMode('pokemon-ar')}
           >
             <Text style={styles.menuButtonText}>
-              🦂 Pokemon AR Camera{'\n'}
+              🦂 Pokemon AR Camera (Complex){'\n'}
               <Text style={styles.menuButtonSubtext}>(Camera + QR Scanner + Pokemon 3D đầy đủ màu sắc)</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuButton, { backgroundColor: '#FF6B6B' }]}
+            onPress={() => setMode('simple-ar')}
+          >
+            <Text style={styles.menuButtonText}>
+              🚀 Simple AR (Recommended){'\n'}
+              <Text style={styles.menuButtonSubtext}>(Đơn giản - Chỉ load GLB trực tiếp)</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuButton, { backgroundColor: '#9B59B6' }]}
+            onPress={() => setMode('optimized-ar')}
+          >
+            <Text style={styles.menuButtonText}>
+              📱 Optimized AR (iPhone 12 Pro Max){'\n'}
+              <Text style={styles.menuButtonSubtext}>(Tối ưu cho iPhone 12 Pro Max - Perfect positioning)</Text>
             </Text>
           </TouchableOpacity>
 
@@ -168,6 +190,40 @@ export default function App() {
       <SafeAreaProvider>
         <View style={styles.demoContainer}>
           <PokemonARViewer onClose={() => setMode('menu')} />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Simple AR (Recommended)
+  if (mode === 'simple-ar') {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.demoContainer}>
+          <SimpleARViewer />
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => setMode('menu')}
+          >
+            <Text style={styles.backButtonText}>⬅️ Quay lại</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Optimized AR (iPhone 12 Pro Max)
+  if (mode === 'optimized-ar') {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.demoContainer}>
+          <OptimizedARViewer />
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => setMode('menu')}
+          >
+            <Text style={styles.backButtonText}>⬅️ Quay lại</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaProvider>
     );
