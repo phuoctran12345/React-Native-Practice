@@ -423,51 +423,95 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       group.add(rightArm);
       
     } else if (config.id.includes('fox')) {
-      // ✅ FOX FALLBACK MODEL
+      // ✅ FOX FALLBACK MODEL - LARGER AND MORE VISIBLE
       console.log('🦊 Creating Fox fallback model');
       
-      // Body (màu cam)
-      const bodyGeometry = new THREE.CylinderGeometry(0.2, 0.3, 0.6, 8);
-      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xFF8C00 });
+      // Body (màu cam) - LARGER
+      const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.5, 1.0, 8);
+      const bodyMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xFF8C00,
+        metalness: 0.1,
+        roughness: 0.8
+      });
       const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
       body.position.y = 0;
+      body.castShadow = true;
+      body.receiveShadow = true;
       group.add(body);
       
-      // Head (màu cam đậm)
-      const headGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-      const headMaterial = new THREE.MeshStandardMaterial({ color: 0xFF4500 });
+      // Head (màu cam đậm) - LARGER
+      const headGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+      const headMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xFF4500,
+        metalness: 0.1,
+        roughness: 0.8
+      });
       const head = new THREE.Mesh(headGeometry, headMaterial);
-      head.position.y = 0.5;
+      head.position.y = 0.8;
+      head.castShadow = true;
+      head.receiveShadow = true;
       group.add(head);
       
-      // Ears (màu cam)
-      const earGeometry = new THREE.ConeGeometry(0.08, 0.15, 6);
-      const earMaterial = new THREE.MeshStandardMaterial({ color: 0xFF4500 });
+      // Ears (màu cam) - LARGER
+      const earGeometry = new THREE.ConeGeometry(0.12, 0.25, 6);
+      const earMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xFF4500,
+        metalness: 0.1,
+        roughness: 0.8
+      });
       
       const leftEar = new THREE.Mesh(earGeometry, earMaterial);
-      leftEar.position.set(-0.1, 0.7, 0);
+      leftEar.position.set(-0.15, 1.1, 0);
       leftEar.rotation.z = -0.2;
+      leftEar.castShadow = true;
       group.add(leftEar);
       
       const rightEar = new THREE.Mesh(earGeometry, earMaterial);
-      rightEar.position.set(0.1, 0.7, 0);
+      rightEar.position.set(0.15, 1.1, 0);
       rightEar.rotation.z = 0.2;
+      rightEar.castShadow = true;
       group.add(rightEar);
       
-      // Tail (màu cam với đuôi trắng)
-      const tailGeometry = new THREE.CylinderGeometry(0.05, 0.1, 0.4, 6);
-      const tailMaterial = new THREE.MeshStandardMaterial({ color: 0xFF8C00 });
+      // Tail (màu cam với đuôi trắng) - LARGER
+      const tailGeometry = new THREE.CylinderGeometry(0.08, 0.15, 0.6, 6);
+      const tailMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xFF8C00,
+        metalness: 0.1,
+        roughness: 0.8
+      });
       const tail = new THREE.Mesh(tailGeometry, tailMaterial);
-      tail.position.set(0, 0.1, -0.3);
+      tail.position.set(0, 0.2, -0.4);
       tail.rotation.x = Math.PI / 4;
+      tail.castShadow = true;
       group.add(tail);
       
-      // Tail tip (màu trắng)
-      const tailTipGeometry = new THREE.SphereGeometry(0.08, 6, 6);
-      const tailTipMaterial = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+      // Tail tip (màu trắng) - LARGER
+      const tailTipGeometry = new THREE.SphereGeometry(0.12, 6, 6);
+      const tailTipMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0xFFFFFF,
+        metalness: 0.1,
+        roughness: 0.8
+      });
       const tailTip = new THREE.Mesh(tailTipGeometry, tailTipMaterial);
-      tailTip.position.set(0, 0.3, -0.5);
+      tailTip.position.set(0, 0.4, -0.7);
+      tailTip.castShadow = true;
       group.add(tailTip);
+      
+      // ✅ ADD EYES FOR BETTER VISIBILITY
+      const eyeGeometry = new THREE.SphereGeometry(0.05, 6, 6);
+      const eyeMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x000000,
+        metalness: 0.0,
+        roughness: 0.1
+      });
+      
+      const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+      leftEye.position.set(-0.1, 0.9, 0.25);
+      group.add(leftEye);
+      
+      const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+      rightEye.position.set(0.1, 0.9, 0.25);
+      group.add(rightEye);
       
     } else {
       // Generic Pokemon fallback
@@ -611,9 +655,24 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             
             // ✅ FALLBACK MODEL LOADING
             const fallbackModel = createFallbackModel(glbConfig);
+            
+            // ✅ ENSURE MODEL IS VISIBLE
+            fallbackModel.position.set(0, 0, 0);
+            fallbackModel.scale.setScalar(glbConfig.scale || 1);
+            fallbackModel.visible = true;
+            
+            // ✅ ADD TO SCENE WITH DEBUG
             modelRef.current = fallbackModel;
             if (sceneRef.current) {
               sceneRef.current.add(fallbackModel);
+              console.log('🎯 Fallback model added to scene:', {
+                position: fallbackModel.position,
+                scale: fallbackModel.scale,
+                visible: fallbackModel.visible,
+                children: fallbackModel.children.length
+              });
+            } else {
+              console.warn('⚠️ Scene not available for fallback model');
             }
             
             setLoadingProgress(100);
@@ -700,8 +759,8 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         console.log('🔄 Adding existing model to new scene');
       }
       
-      // ✅ SETUP CAMERA
-      camera.position.set(0, 0.6, 6.5); // ✅ nâng camera + lùi ra một chút
+      // ✅ SETUP CAMERA - BETTER POSITION FOR FALLBACK MODELS
+      camera.position.set(0, 1.0, 4.0); // ✅ Closer and higher for better visibility
       camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
@@ -776,6 +835,17 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
         if (modelRef.current) {
           const time = Date.now() * 0.001;
+
+          // ✅ DEBUG: Log model info occasionally
+          if (Math.floor(time) % 5 === 0 && Math.floor(time * 10) % 10 === 0) {
+            console.log('🎯 Model debug:', {
+              position: modelRef.current.position,
+              scale: modelRef.current.scale,
+              visible: modelRef.current.visible,
+              children: modelRef.current.children.length,
+              isFallback: (modelRef.current as any).isFallback
+            });
+          }
 
           // Update AnimationMixer nếu có
           if ((modelRef.current as any).updateMixer) {
