@@ -90,7 +90,7 @@ export class Dynamic3DLoader {
         } else {
           console.log(`❌ Dynamic URL failed: ${response.status}`);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.log(`❌ Dynamic URL error:`, error.message);
       }
     }
@@ -122,17 +122,14 @@ export class Dynamic3DLoader {
           hasScenes: !!gltfData.scenes,
           type: typeof gltfData,
         });
-      } catch (textureError) {
+      } catch (textureError: any) {
         console.warn(`⚠️ Texture loading error (continuing):`, textureError.message);
         // Continue loading even if textures fail
-        gltfData = await loadAsync(url, { 
-          ignoreTextureErrors: true,
-          skipTextures: true 
-        });
+        gltfData = await loadAsync(url);
       }
       
       // Extract scene
-      let scene;
+      let scene: any;
       if (gltfData.scene) {
         scene = gltfData.scene;
       } else if (gltfData.scenes && gltfData.scenes.length > 0) {

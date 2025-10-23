@@ -1,4 +1,212 @@
-luôn luôn làm sạch log - chỉ để những cái log cần thiết và quan trọng 
+---
+description:
+globs:
+alwaysApply: true
+---
+Quy Tắc Thiết Kế Mô Hình 3D cho AR (React Native)
+Tài liệu này quy định các yêu cầu kỹ thuật bắt buộc đối với tất cả các mô hình 3D (assets) được sử dụng trong dự án AR React Native (sử dụng các thư viện như ViroReact, Three.js, Expo-GL).
 
-chạy cho đúng file thiết kế gốc 
-không hardcode - viết sao cho đây là process scale nhiều file .glb 3d khác -> mở rộng dự án với các chức năng chính như xoay 360 độ - animation được define trong .glb 
+1. Hiệu Năng & Tối Ưu Hóa (Quan trọng nhất)
+Đây là ưu tiên hàng đầu. Một model đẹp mà không chạy mượt thì cũng vô dụng.
+
+Polycount (Số Lượng Polygon):
+
+Quy tắc chung: Luôn giữ ở mức thấp nhất có thể mà vẫn đảm bảo được hình dáng (silhouette) của vật thể.
+
+Đối tượng chính (Hero Asset): Cố gắng giữ dưới 50,000 polygons (tris).
+
+Đối tượng phụ/cảnh (Prop/Scenery): Dưới 10,000 polygons.
+
+Toàn cảnh (Total Scene): Tổng số polygon hiển thị cùng lúc không nên vượt quá 200,000 polygons để đảm bảo tương thích với các thiết bị tầm trung.
+
+Draw Calls (Lệnh Gọi Vẽ):
+
+Đây là "kẻ thù" lớn nhất của hiệu năng. Mỗi vật liệu (material) riêng biệt trên mỗi đối tượng (mesh) là một draw call.
+
+Gộp Mesh (Combine Meshes): Gộp tất cả các phần tĩnh (static parts) của một model thành một mesh duy nhất. Ví dụ: một chiếc xe nên là 1 mesh, không phải là 4 bánh xe, 1 thân xe, 2 đèn... riêng lẻ.
+
+Gộp Vật Liệu (Texture Atlas): Sử dụng 1 texture duy nhất (gọi là Texture Atlas) cho nhiều đối tượng hoặc nhiều phần của 1 đối tượng. Lý tưởng nhất, mỗi model chỉ nên có 1 vật liệu (1 material).
+
+Kích Thước File:
+
+File .glb cuối cùng nên có dung lượng < 5MB.
+
+Sử dụng nén Draco (một tùy chọn khi export từ Blender) để giảm kích thước file mà không ảnh hưởng nhiều đến chất lượng.
+
+2. Định Dạng File & Tương Thích
+Định Dạng Bắt Buộc: gLTF 2.0
+
+Tất cả model phải được export dưới dạng .glb (file nhị phân chứa cả model và texture) hoặc .gltf (file JSON + file texture riêng).
+
+Ưu tiên .glb vì nó là một file duy nhất, dễ quản lý và load nhanh hơn.
+
+Vật Liệu (Materials):
+
+Phải sử dụng vật liệu PBR (Physically Based Rendering).
+
+Các map PBR tiêu chuẩn được hỗ trợ: Base Color (Albedo), Metallic, Roughness, Normal, Ambient Occlusion (AO), Emissive.
+
+Tương Thích:
+
+Không sử dụng các shader (chất liệu) đặc biệt, phức tạp hoặc các tính năng độc quyền của phần mềm 3D (như Arnold, V-Ray). Chỉ dùng các node PBR tiêu chuẩn của gLTF.
+
+3. Textures (Họa Tiết)
+Kích Thước (Dimensions):
+
+Phải là lũy thừa của 2 (Powers of Two - POT). Ví dụ: 512x512, 1024x1024, 2048x2048.
+
+Tuyệt đối không dùng kích thước lẻ (ví dụ: 1200x800).
+
+Giới hạn: Tối đa là 2048x2048 (2K) cho đối tượng chính. Ưu tiên 1024x1024 (1K) cho hầu hết các model.
+
+Định Dạng (Format):
+
+Sử dụng .jpg cho các texture không cần kênh alpha (như Base Color, Normal).
+
+Sử dụng .png cho các texture cần kênh alpha (trong suốt).
+
+Tối Ưu Map (Channel Packing):
+
+Đây là một kỹ thuật tối ưu cao cấp: Gộp 3 map trắng đen (Metallic, Roughness, Ambient Occlusion) vào 3 kênh R, G, B của một file texture duy nhất (thường gọi là map ORM).
+
+Việc này giảm số lượng file texture cần load từ 3 xuống còn 1.
+
+4. Tiêu Chuẩn Cho AR (Rất Quan Trọng)
+Tỷ Lệ (Scale):
+
+Model phải được làm ở tỷ lệ 1:1 với thế giới thực.
+
+Quy tắc: 1 đơn vị (unit) trong phần mềm 3D (Blender, Maya...) = 1 mét ngoài đời thực.
+
+Ví dụ: Nếu làm cái bàn cao 0.8m, thì model trong Blender phải cao 0.8 units.
+
+Tâm Xoay (Pivot Point / Origin):
+
+Tâm của model phải được đặt ở dưới đáy, chính giữa (0, 0, 0) của vật thể.
+
+Điều này quyết định model sẽ "đáp" xuống mặt phẳng (plane) trong AR như thế nào. Nếu đặt sai, model sẽ lơ lửng hoặc "chìm" xuống đất.
+
+Transforms:
+
+Trước khi export, phải "đóng băng" (Freeze Transformations / Apply Transformations) tất cả các thay đổi về vị trí, xoay, và tỷ lệ.
+
+Trong Blender: Chọn model, nhấn Ctrl + A -> All Transforms.
+
+Model cuối cùng phải có Vị trí (Location) = (0,0,0), Xoay (Rotation) = (0,0,0), và Tỷ lệ (Scale) = (1,1,1).
+
+Hướng (Orientation):
+
+Model phải hướng về phía trước theo trục -Z (hoặc +Z, tùy quy ước của thư viện, nhưng phải nhất quán). Trục +Y phải là trục "lên" (Up).
+
+5. Cấu Trúc & Đặt Tên
+Dọn Dẹp Scene:
+
+Xóa tất cả camera, đèn (lights), và các node rác không cần thiết ra khỏi file export.
+
+Đặt Tên:
+
+Tất cả mesh, vật liệu, và texture phải được đặt tên rõ ràng, bằng tiếng Anh không dấu, không ký tự đặc biệt.
+
+Tốt: Pikachu_Mesh, Pikachu_Material
+
+Xấu: Cube.001, Material_v2_final
+
+Tóm Tắt (Checklist Nhanh)
+Trước khi gửi model cho lập trình viên (hoặc tự sử dụng):
+
+[ ] Định dạng: Là file .glb chưa?
+
+[ ] Vật liệu: Đã dùng PBR chuẩn chưa?
+
+[ ] Tỷ lệ: Đã đúng 1 unit = 1 mét chưa?
+
+[ ] Tâm (Pivot): Đã ở dưới đáy, chính giữa chưa?
+
+[ ] Transform: Đã "Apply All Transforms" chưa (Scale = 1, 1, 1)?
+
+[ ] Polycount: Có dưới 50,000 tris không?
+
+[ ] Draw Calls: Đã gộp thành 1 mesh, 1 vật liệu chưa?
+
+[ ] Texture: Kích thước có phải là lũy thừa của 2 (POT) và dưới 2K không?
+
+
+. Kiến Trúc Code & Tính Mở Rộng (Scalability)
+Không Hardcode Tên File: Đây là quy tắc vàng để mở rộng.
+
+Tệ (Hardcode): const model = require('./assets/pikachu.glb');
+
+Tốt (Scalable): Tạo một component ARViewer có thể tái sử dụng, nhận model như một prop.
+
+
+
+. Hỗ Trợ Các Chức Năng 3D Cốt Lõi
+Component 3D/AR của bạn phải được thiết kế để xử lý các chức năng cơ bản mà file .glb cung cấp, thay vì chỉ hiển thị tĩnh.
+
+Hỗ trợ Animation (Quan trọng):
+
+Định dạng .glb có thể chứa nhiều "track" animation (ví dụ: "Idle", "Walk", "Attack").
+
+Code của bạn phải có khả năng đọc danh sách các animation có trong file và kích hoạt (play/stop/loop) một animation cụ thể dựa theo logic (ví dụ: khi người dùng nhấn nút).
+
+Tương Tác Xoay/Zoom (360 View):
+
+Cung cấp khả năng cho người dùng tương tác với model (ngay cả khi không ở chế độ AR).
+
+Sử dụng các thư viện cử chỉ (ví dụ: react-native-gesture-handler) để cho phép người dùng dùng 1 ngón tay xoay 360 độ (orbit) hoặc dùng 2 ngón tay để zoom (pinch-to-zoom) model.
+
+
+Okay, dựa trên file JSON bạn cung cấp và các log lỗi, đây là "công thức" (hay quy trình) mà một trình render (như three.js hoặc expo-three) sử dụng để lấy màu từ texture và áp lên mô hình con cáo:
+
+Xác định Mesh và Vật liệu:
+
+Trình render tìm đến mảng meshes. Ở đây có một mesh tên "fox1" (index 0).
+
+Mesh này sử dụng vật liệu (material) có index 0 ( "material": 0).
+
+Tìm thông tin Texture trong Vật liệu:
+
+Trình render vào mảng materials, tìm vật liệu ở index 0 ("fox_material").
+
+Trong "pbrMetallicRoughness", nó thấy "baseColorTexture": { "index": 0 }. Điều này nói rằng màu cơ bản của vật liệu này được lấy từ texture có index 0.
+
+Tìm Texture và Nguồn ảnh:
+
+Trình render vào mảng textures, tìm texture ở index 0.
+
+Texture này có "source": 0, nghĩa là nó sử dụng hình ảnh (image) có index 0.
+
+Xác định vị trí dữ liệu ảnh:
+
+Trình render vào mảng images, tìm image ở index 0.
+
+Image này có "mimeType": "image/png" và "bufferView": 7. Điều này cực kỳ quan trọng: nó cho biết đây là ảnh PNG và dữ liệu thực tế của ảnh nằm trong bufferView thứ 7.
+
+Truy cập dữ liệu ảnh trong khối BIN:
+
+Trình render vào mảng bufferViews, tìm bufferView ở index 7.
+
+bufferView 7 có "buffer": 0, "byteOffset": 119904, "byteLength": 26764. Điều này hướng dẫn trình render: "Hãy vào khối dữ liệu nhị phân (buffer 0 - chính là khối BIN), nhảy đến vị trí byte thứ 119904, và đọc 26764 bytes tiếp theo. Đó chính là dữ liệu của file ảnh PNG."
+
+Giải mã ảnh và tạo Texture:
+
+Trình render lấy 26764 bytes dữ liệu PNG đó từ khối BIN.
+
+Nó giải mã dữ liệu PNG này để tạo thành một đối tượng Texture (ví dụ: THREE.Texture) mà card đồ họa có thể hiểu.
+
+Xác định Tọa độ UV:
+
+Quay lại meshes -> primitives -> attributes, trình render thấy "TEXCOORD_0": 1. Điều này chỉ định rằng tọa độ UV (để biết cách "dán" texture lên bề mặt) nằm trong accessor có index 1.
+
+Trình render vào mảng accessors, tìm accessor ở index 1. Accessor này mô tả cách đọc dữ liệu tọa độ UV (dạng VEC2 - cặp số thực) từ bufferView 1 trong khối BIN.
+
+Áp Texture lên Mô hình (Rendering):
+
+Khi vẽ các tam giác (polygons) tạo nên con cáo, trình render sử dụng tọa độ UV đọc được từ bước 7 cho mỗi đỉnh của tam giác.
+
+Dựa vào tọa độ UV, nó xác định điểm ảnh (pixel) tương ứng trên đối tượng Texture (đã giải mã từ ảnh PNG ở bước 6).
+
+Nó lấy màu của pixel đó trên texture và tô màu cho điểm tương ứng trên bề mặt 3D của con cáo.
+
+Tóm lại: JSON chỉ là "bản đồ" chỉ đường. Nó nói cho trình render biết: "Màu của con cáo là một ảnh PNG, nằm ở vị trí X trong khối dữ liệu nhị phân BIN. Hãy dùng tọa độ UV ở vị trí Y để dán ảnh đó lên mô hình."
+
