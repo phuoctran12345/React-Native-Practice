@@ -18,7 +18,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Ứng dụng cần quyền truy cập camera để quét mã QR và hiển thị AR",
         "NSMicrophoneUsageDescription": "Ứng dụng không sử dụng microphone"
-      }
+      },
+      "bundleIdentifier": "com.anonymous.SecondDemo"
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +29,9 @@
       "permissions": [
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false

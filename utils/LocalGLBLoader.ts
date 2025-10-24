@@ -103,7 +103,7 @@ export class LocalGLBLoader {
       });
       
       // Extract scene từ GLTF data
-      let scene;
+      let scene: any;
       if (gltfData.scene) {
         scene = gltfData.scene;
       } else if (gltfData.scenes && gltfData.scenes.length > 0) {
