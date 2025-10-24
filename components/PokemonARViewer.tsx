@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert, TouchableWithoutFeedback, Dimensions, Platform } from 'react-native';
+import { View, StyleSheet, Text, ActivityIndicator, Alert, Dimensions, Platform, PanResponder } from 'react-native';
 import { Camera, CameraView } from 'expo-camera';
 import { GLView } from 'expo-gl';
-import { Renderer } from 'expo-three';
+import { Renderer, loadAsync } from 'expo-three';
 import * as THREE from 'three';
+import { Asset } from 'expo-asset';
+// ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
 import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
 import { getGLBModelFromQRData, getGLBModelConfig } from '../utils/modelData';
 
@@ -26,24 +28,122 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const clockRef = useRef(new THREE.Clock());
+  // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
   const [scannedData, setScannedData] = useState<string | null>(null);
   const [currentAnimation, setCurrentAnimation] = useState<string>('idle');
   const [animationFeedback, setAnimationFeedback] = useState<string>('');
+  const [showGestureHint, setShowGestureHint] = useState<boolean>(true);
 
-  // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ VÀ ZOOM - SỬA LỖI!
-  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
-  const [initialDistance, setInitialDistance] = useState<number | null>(null);
-  const [currentScale, setCurrentScale] = useState<number>(1);
-  
-  // ✅ TC3.2: SWIPE GESTURE TRACKING
-  const [swipeStart, setSwipeStart] = useState<{ x: number; y: number; time: number } | null>(null);
-  const [isSwipeGesture, setIsSwipeGesture] = useState(false);
-  
+  // ✅ PANRESPONDER CHO XOAY 360 ĐỘ VÀ ZOOM - CHUYÊN NGHIỆP!
+  const [previousRotationX, setPreviousRotationX] = useState(0);
+  const [previousRotationY, setPreviousRotationY] = useState(0);
+  const [previousScale, setPreviousScale] = useState(1);
+  const [isRotating, setIsRotating] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
+
+  // ✅ PANRESPONDER CHO 3D INTERACTION - XỬ LÝ CỬ CHỈ LIÊN TỤC!
+  console.log('🎮 Using PanResponder for continuous gestures...');
+
+  // ✅ PANRESPONDER CHO 3D INTERACTION - CHUYÊN NGHIỆP!
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => {
+      console.log('🎮 PanResponder: onStartShouldSetPanResponder called');
+      return true;
+    },
+    onMoveShouldSetPanResponder: () => {
+      console.log('🎮 PanResponder: onMoveShouldSetPanResponder called');
+      return true;
+    },
+    
+    onPanResponderGrant: (evt) => {
+      console.log('🎮 PanResponder: Interaction started');
+      console.log('🎮 PanResponder: Touch event details:', {
+        touches: evt.nativeEvent.touches?.length || 0,
+        timestamp: evt.nativeEvent.timestamp,
+        target: evt.target
+      });
+      
+      // ✅ ẨN GESTURE HINT SAU KHI USER TƯƠNG TÁC
+      if (showGestureHint) {
+        console.log(`🎯 Hiding gesture hint after user interaction`);
+        setShowGestureHint(false);
+      }
+      
+      // ✅ SETUP INITIAL STATE
+      setIsRotating(true);
+      setIsZooming(false);
+      console.log('🔄 PanResponder ready for interaction');
+    },
+    
+    onPanResponderMove: (evt, gestureState) => {
+      if (!modelRef.current) {
+        console.log('❌ PanResponder: modelRef.current is null');
+        return;
+      }
+      
+      const touches = evt.nativeEvent.touches;
+      console.log(`🎮 PanResponder move: ${touches.length} fingers, dx: ${gestureState.dx.toFixed(2)}, dy: ${gestureState.dy.toFixed(2)}`);
+      
+      if (touches.length === 1) {
+        // ✅ THUẬT TOÁN XOAY 360 ĐỘ - SINGLE TOUCH
+        console.log('🔄 Single touch detected - applying rotation');
+        const ROTATION_SENSITIVITY = 0.01;
+        const deltaX = gestureState.dx * ROTATION_SENSITIVITY;
+        const deltaY = gestureState.dy * ROTATION_SENSITIVITY;
+        
+        const currentRotationY = previousRotationY + deltaX;
+        const currentRotationX = previousRotationX + deltaY;
+        
+        // ✅ GIỚI HẠN GÓC XOAY DỌC
+        const clampedRotationX = Math.max(-Math.PI/2, Math.min(Math.PI/2, currentRotationX));
+        
+        // ✅ CẬP NHẬT MODEL
+        modelRef.current.rotation.y = currentRotationY;
+        modelRef.current.rotation.x = clampedRotationX;
+        
+        console.log(`🔄 Rotation applied: X=${clampedRotationX.toFixed(3)}, Y=${currentRotationY.toFixed(3)}`);
+        
+      } else if (touches.length === 2) {
+        // ✅ THUẬT TOÁN ZOOM IN/OUT - MULTI TOUCH
+        console.log('🔍 Multi touch detected - applying zoom');
+        const currentDistance = Math.sqrt(
+          Math.pow(touches[0].pageX - touches[1].pageX, 2) + 
+          Math.pow(touches[0].pageY - touches[1].pageY, 2)
+        );
+        
+        // Tính scale dựa trên distance (simplified)
+        const scale = Math.max(0.5, Math.min(3.0, currentDistance / 200));
+        const originalScale = (modelRef.current as any).originalScale || 0.0129265882742369;
+        const targetScale = originalScale * scale;
+        
+        // ✅ CẬP NHẬT MODEL
+        modelRef.current.scale.setScalar(targetScale);
+        
+        console.log(`🔍 Zoom applied: ${scale.toFixed(2)}x, Scale: ${targetScale.toFixed(3)}`);
+      }
+    },
+    
+    onPanResponderRelease: (evt) => {
+      console.log('🎮 PanResponder: Interaction ended');
+      
+      // ✅ LƯU TRẠNG THÁI TRƯỚC ĐÓ KHI GESTURE KẾT THÚC
+      if (modelRef.current) {
+        setPreviousRotationX(modelRef.current.rotation.x);
+        setPreviousRotationY(modelRef.current.rotation.y);
+        setPreviousScale(modelRef.current.scale.x);
+        console.log(`💾 Saved state: rotationX=${modelRef.current.rotation.x.toFixed(3)}, rotationY=${modelRef.current.rotation.y.toFixed(3)}, scale=${modelRef.current.scale.x.toFixed(3)}`);
+      }
+      
+      setIsRotating(false);
+      setIsZooming(false);
+    }
+  });
+
   // ✅ TC6.2: SCREEN COMPATIBILITY
   const screenData = Dimensions.get('window');
   const isIOS = Platform.OS === 'ios';
   const hasNotch = screenData.height > 800; // Approximate notch detection
-  
+
   // ✅ HELPER FUNCTION ĐỂ TÍNH KHOẢNG CÁCH GIỮA 2 TOUCH
   const getDistance = (touch1: any, touch2: any) => {
     const dx = touch1.pageX - touch2.pageX;
@@ -66,7 +166,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
     // Check intersection with model
     const intersects = raycaster.intersectObject(modelRef.current, true);
-    
+
     if (intersects.length > 0) {
       console.log('🎯 Model touched! Triggering animation...');
       return intersects[0];
@@ -80,10 +180,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
     const anyModel = modelRef.current as any;
     const clips = anyModel.animations || [];
-    
+
     if (clips.length > 0) {
       // Find animation clip
-      const clip = clips.find((c: any) => 
+      const clip = clips.find((c: any) =>
         c.name?.toLowerCase().includes(animationName.toLowerCase())
       ) || clips[Math.floor(Math.random() * clips.length)]; // Random if not found
 
@@ -121,11 +221,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     const deltaY = endY - startY;
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
     const velocity = distance / duration; // pixels per ms
-    
+
     // Swipe thresholds
     const minDistance = 100; // minimum swipe distance
     const minVelocity = 0.5; // minimum swipe velocity
-    
+
     if (distance > minDistance && velocity > minVelocity) {
       // Determine swipe direction
       const angle = Math.atan2(deltaY, deltaX);
@@ -137,16 +237,16 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         up: deltaY < 0,
         down: deltaY > 0
       };
-      
+
       console.log(`🏐 Swipe detected! Distance: ${distance.toFixed(2)}, Velocity: ${velocity.toFixed(2)}, Direction:`, direction);
-      
+
       // Trigger throw animation based on direction
       if (direction.horizontal) {
         triggerThrowAnimation(direction.right ? 'throw_right' : 'throw_left', velocity);
       } else if (direction.vertical) {
         triggerThrowAnimation(direction.up ? 'throw_up' : 'throw_down', velocity);
       }
-      
+
       return true;
     }
     return false;
@@ -158,10 +258,10 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
     const anyModel = modelRef.current as any;
     const clips = anyModel.animations || [];
-    
+
     if (clips.length > 0) {
       // Find throw animation or use attack/fly animation
-      const throwClip = clips.find((c: any) => 
+      const throwClip = clips.find((c: any) =>
         c.name?.toLowerCase().includes('attack') ||
         c.name?.toLowerCase().includes('fly') ||
         c.name?.toLowerCase().includes('jump')
@@ -173,7 +273,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       action.reset();
       action.setLoop(THREE.LoopOnce, 1);
       action.clampWhenFinished = true;
-      
+
       // Adjust playback speed based on swipe velocity
       const speedMultiplier = Math.min(Math.max(velocity / 2, 0.5), 3.0);
       action.setEffectiveTimeScale(speedMultiplier);
@@ -191,7 +291,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
         const originalScale = (modelRef.current as any).originalScale || 0.6;
         const scaleEffect = originalScale * (1 + velocity * 0.1);
         modelRef.current.scale.setScalar(scaleEffect);
-        
+
         // Return to normal scale
         setTimeout(() => {
           if (modelRef.current) {
@@ -213,124 +313,17 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     }
   };
 
-  const handleTouchStart = (event: any) => {
-    const touches = event.nativeEvent.touches;
-    console.log(`👆 Touch start: ${touches.length} fingers`);
-    
-    if (touches.length === 1) {
-      const touch = touches[0];
-      
-      // ✅ TC3.1: RAYCASTING CHECK FOR MODEL TOUCH - TC6.2: USE ACTUAL SCREEN DIMENSIONS
-      const intersection = performRaycasting(touch.pageX, touch.pageY, screenData.width, screenData.height);
-      
-      if (intersection) {
-        // Model was touched - trigger animation
-        triggerTouchAnimation('hit');
-      } else {
-        // Empty space touched - could be rotation or swipe
-        setTouchStart({ x: touch.pageX, y: touch.pageY });
-        setSwipeStart({ x: touch.pageX, y: touch.pageY, time: Date.now() });
-        setIsSwipeGesture(false);
-        console.log(`🔄 Single touch - rotation/swipe mode`);
-      }
-    } else if (touches.length === 2) {
-      // Multi touch - zoom
-      const distance = getDistance(touches[0], touches[1]);
-      setInitialDistance(distance);
-      setCurrentScale(1); // Reset scale
-      console.log(`🔍 Multi touch - zoom mode, distance: ${distance.toFixed(2)}`);
-    }
-  };
-  
-  const handleTouchMove = (event: any) => {
-    if (!modelRef.current) return;
-    
-    const touches = event.nativeEvent.touches;
-    
-    if (touches.length === 1 && touchStart) {
-      // Single touch - rotation
-      const touch = touches[0];
-      const deltaX = touch.pageX - touchStart.x;
-      const deltaY = touch.pageY - touchStart.y;
-      const rotationSpeed = 0.008; // ✅ TĂNG TỐC ĐỘ XOAY
-      
-      // ✅ ĐÁNH DẤU USER ĐANG XOAY
-      (modelRef.current as any).isUserRotating = true;
-      
-      // ✅ XOAY 360 ĐỘ THEO CẢ X VÀ Y - FIX
-      modelRef.current.rotation.y += deltaX * rotationSpeed;
-      modelRef.current.rotation.x += deltaY * rotationSpeed * 0.3; // Giảm tốc độ xoay dọc
-      
-      // ✅ GIỚI HẠN ROTATION X ĐỂ KHÔNG BỊ LẬT NGƯỢC
-      modelRef.current.rotation.x = Math.max(-Math.PI/3, Math.min(Math.PI/3, modelRef.current.rotation.x));
-      
-      // ✅ CẬP NHẬT TOUCH START ĐỂ XOAY MƯỢT
-      setTouchStart({ x: touch.pageX, y: touch.pageY });
-      
-    } else if (touches.length === 2 && initialDistance) {
-      // Multi touch - zoom
-      const currentDistance = getDistance(touches[0], touches[1]);
-      const scale = currentDistance / initialDistance;
-      
-      // ✅ GIỚI HẠN ZOOM (0.3x đến 2x) - MOBILE FRIENDLY
-      const clampedScale = Math.max(0.3, Math.min(2, scale));
-      const originalScale = (modelRef.current as any).originalScale || 0.03;
-      
-      // ✅ SMOOTH SCALING
-      const targetScale = originalScale * clampedScale;
-      modelRef.current.scale.setScalar(targetScale);
-      
-      console.log(`🔍 Zoom: ${clampedScale.toFixed(2)}x, Scale: ${targetScale.toFixed(3)}, Distance: ${currentDistance.toFixed(2)}`);
-      
-      // ✅ CẬP NHẬT DISTANCE LIÊN TỤC
-      setInitialDistance(currentDistance);
-    }
-  };
-  
-  const handleTouchEnd = (event: any) => {
-    console.log(`👆 Touch end`);
-    
-    // ✅ TC3.2: CHECK FOR SWIPE GESTURE ON TOUCH END
-    if (swipeStart && !isSwipeGesture) {
-      const touch = event.nativeEvent.changedTouches[0];
-      const endTime = Date.now();
-      const duration = endTime - swipeStart.time;
-      
-      const wasSwipe = detectSwipeGesture(
-        swipeStart.x, 
-        swipeStart.y, 
-        touch.pageX, 
-        touch.pageY, 
-        duration
-      );
-      
-      if (wasSwipe) {
-        setIsSwipeGesture(true);
-      }
-    }
-    
-    setTouchStart(null);
-    setSwipeStart(null);
-    setInitialDistance(null);
-    setIsSwipeGesture(false);
-    
-    // ✅ RESET USER ROTATING FLAG SAU 1 GIÂY
-    setTimeout(() => {
-      if (modelRef.current) {
-        (modelRef.current as any).isUserRotating = false;
-      }
-    }, 1000);
-  };
+  // ✅ TOUCH HANDLERS ĐÃ ĐƯỢC THAY THẾ BẰNG PANRESPONDER
 
   const onHandlerStateChange = (event: any) => {
     if (event.nativeEvent.state === State.END) {
       if (modelRef.current) {
         const { velocityX } = event.nativeEvent;
-        const momentum = velocityX * 0.002; // Tăng momentum
-        
+        const momentum = velocityX * 0.001; // ✅ MOMENTUM MƯỢT MÀ CHO 360 ĐỘ
+
         // ✅ THÊM MOMENTUM SAU KHI THẢ TAY
         modelRef.current.rotation.y += momentum;
-        
+
         // ✅ RESET FLAG SAU 2 GIÂY
         setTimeout(() => {
           if (modelRef.current) {
@@ -338,7 +331,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             // console.log(`🔄 Auto rotation resumed`); // ❌ BỚT LOG
           }
         }, 2000);
-        
+
         // console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
       }
     }
@@ -346,14 +339,18 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
   useEffect(() => {
     requestCameraPermission();
-    
+
     // ✅ PRELOAD MODELS NGAY KHI KHỞI ĐỘNG APP
     preloadModels();
-    
+
+    // ✅ KHÔNG AUTO-HIDE NGAY - CHỜ MODEL LOAD XONG
+    // Auto-hide sẽ được set trong loadPokemonModel
+
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      // ✅ KHÔNG CLEAR HINT TIMEOUT Ở ĐÂY NỮA
     };
   }, []);
 
@@ -361,7 +358,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   const preloadModels = async () => {
     try {
       console.log('⚡ Preloading models for instant access...');
-      
+
       // ✅ PRELOAD SCIZOR MODEL - DIRECT LOADING
       try {
         const scizorModuleId = require('../assets/models/pokemon_scizor.glb');
@@ -369,7 +366,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       } catch (error) {
         console.log('⚠️ Scizor preload failed:', error);
       }
-      
+
       // ✅ PRELOAD FOX MODEL - DIRECT LOADING
       try {
         const foxModuleId = require('../assets/models/Fox.glb');
@@ -377,7 +374,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       } catch (error) {
         console.log('⚠️ Fox preload failed:', error);
       }
-      
+
     } catch (error) {
       console.log('⚠️ Preload failed, will load on demand:', error);
     }
@@ -389,149 +386,6 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     console.log('📷 Camera permission:', status === 'granted' ? 'GRANTED' : 'DENIED');
   };
 
-  // Tạo fallback model khi load thất bại
-  const createFallbackModel = (config: any) => {
-    const group = new THREE.Group();
-    
-    if (config.id.includes('scizor')) {
-      // Tạo Scizor-like fallback
-      
-      // Body (màu đỏ)
-      const bodyGeometry = new THREE.CylinderGeometry(0.3, 0.4, 0.8, 8);
-      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xCC0000 });
-      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      body.position.y = 0;
-      group.add(body);
-      
-      // Head (màu đỏ đậm)
-      const headGeometry = new THREE.SphereGeometry(0.25, 8, 8);
-      const headMaterial = new THREE.MeshStandardMaterial({ color: 0x990000 });
-      const head = new THREE.Mesh(headGeometry, headMaterial);
-      head.position.y = 0.6;
-      group.add(head);
-      
-      // Arms/Claws (màu bạc)
-      const armGeometry = new THREE.BoxGeometry(0.15, 0.6, 0.15);
-      const armMaterial = new THREE.MeshStandardMaterial({ color: 0xCCCCCC });
-      
-      const leftArm = new THREE.Mesh(armGeometry, armMaterial);
-      leftArm.position.set(-0.4, 0.2, 0);
-      group.add(leftArm);
-      
-      const rightArm = new THREE.Mesh(armGeometry, armMaterial);
-      rightArm.position.set(0.4, 0.2, 0);
-      group.add(rightArm);
-      
-    } else if (config.id.includes('fox')) {
-      // ✅ FOX FALLBACK MODEL - LARGER AND MORE VISIBLE
-      console.log('🦊 Creating Fox fallback model');
-      
-      // Body (màu cam) - LARGER
-      const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.5, 1.0, 8);
-      const bodyMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0xFF8C00,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      body.position.y = 0;
-      body.castShadow = true;
-      body.receiveShadow = true;
-      group.add(body);
-      
-      // Head (màu cam đậm) - LARGER
-      const headGeometry = new THREE.SphereGeometry(0.3, 8, 8);
-      const headMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0xFF4500,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const head = new THREE.Mesh(headGeometry, headMaterial);
-      head.position.y = 0.8;
-      head.castShadow = true;
-      head.receiveShadow = true;
-      group.add(head);
-      
-      // Ears (màu cam) - LARGER
-      const earGeometry = new THREE.ConeGeometry(0.12, 0.25, 6);
-      const earMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0xFF4500,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      
-      const leftEar = new THREE.Mesh(earGeometry, earMaterial);
-      leftEar.position.set(-0.15, 1.1, 0);
-      leftEar.rotation.z = -0.2;
-      leftEar.castShadow = true;
-      group.add(leftEar);
-      
-      const rightEar = new THREE.Mesh(earGeometry, earMaterial);
-      rightEar.position.set(0.15, 1.1, 0);
-      rightEar.rotation.z = 0.2;
-      rightEar.castShadow = true;
-      group.add(rightEar);
-      
-      // Tail (màu cam với đuôi trắng) - LARGER
-      const tailGeometry = new THREE.CylinderGeometry(0.08, 0.15, 0.6, 6);
-      const tailMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0xFF8C00,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const tail = new THREE.Mesh(tailGeometry, tailMaterial);
-      tail.position.set(0, 0.2, -0.4);
-      tail.rotation.x = Math.PI / 4;
-      tail.castShadow = true;
-      group.add(tail);
-      
-      // Tail tip (màu trắng) - LARGER
-      const tailTipGeometry = new THREE.SphereGeometry(0.12, 6, 6);
-      const tailTipMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0xFFFFFF,
-        metalness: 0.1,
-        roughness: 0.8
-      });
-      const tailTip = new THREE.Mesh(tailTipGeometry, tailTipMaterial);
-      tailTip.position.set(0, 0.4, -0.7);
-      tailTip.castShadow = true;
-      group.add(tailTip);
-      
-      // ✅ ADD EYES FOR BETTER VISIBILITY
-      const eyeGeometry = new THREE.SphereGeometry(0.05, 6, 6);
-      const eyeMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0x000000,
-        metalness: 0.0,
-        roughness: 0.1
-      });
-      
-      const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-      leftEye.position.set(-0.1, 0.9, 0.25);
-      group.add(leftEye);
-      
-      const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-      rightEye.position.set(0.1, 0.9, 0.25);
-      group.add(rightEye);
-      
-    } else {
-      // Generic Pokemon fallback
-      const geometry = new THREE.SphereGeometry(0.5, 8, 8);
-      const material = new THREE.MeshStandardMaterial({ 
-        color: 0xFFD700,
-        wireframe: true
-      });
-      const sphere = new THREE.Mesh(geometry, material);
-      group.add(sphere);
-    }
-    
-    // Add metadata
-    (group as any).modelType = config.id;
-    (group as any).isFallback = true;
-    (group as any).source = 'pokemon-fallback';
-    (group as any).originalScale = config.scale || 1;
-    
-    return group;
-  };
 
   // Handle QR Code scan
   const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
@@ -540,208 +394,227 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     loadPokemonModel(data);
   };
 
-  // Load Pokemon model từ QR data
+  // ✅ DYNAMIC SCALE SYSTEM - HỆ THỐNG SCALE TỰ ĐỘNG
+  const calculateOptimalScale = (model: THREE.Object3D) => {
+    console.log('📐 Calculating optimal scale for model...');
+    
+    // ✅ BƯỚC 1: LẤY KÍCH THƯỚC MODEL (BOUNDING BOX)
+    const box = new THREE.Box3().setFromObject(model);
+          const size = box.getSize(new THREE.Vector3());
+          const maxDimension = Math.max(size.x, size.y, size.z);
+
+          console.log('📏 Model bounding box:', {
+            width: size.x,
+            height: size.y,
+            depth: size.z,
+            maxDimension: maxDimension
+          });
+
+    // ✅ BƯỚC 2: TÍNH SCALE DỰA TRÊN MÀN HÌNH
+    const screenHeight = Dimensions.get('window').height;
+    const screenWidth = Dimensions.get('window').width;
+    const aspectRatio = screenWidth / screenHeight;
+    
+          // ✅ MỤC TIÊU: MODEL CHIẾM 100% KÍCH THƯỚC TỰ NHIÊN
+          const targetScreenSize = 2.0; // 200% - giảm kích thước để model vừa phải
+          const optimalScale = targetScreenSize / maxDimension;
+
+    // ✅ DEBUG: SCALE CALCULATION
+    console.log('🎯 Scale calculation:', {
+            targetScreenSize,
+            maxDimension,
+      calculatedScale: optimalScale,
+      screenSize: { width: screenWidth, height: screenHeight, aspectRatio }
+    });
+    
+          // ✅ BƯỚC 3: ÁP DỤNG SCALE VÀ SETUP ZOOM LIMITS
+          model.scale.setScalar(optimalScale);
+          model.position.set(0, -0.1, 0);
+          
+          // ✅ DEBUG: LOG SCALE CUỐI CÙNG
+          console.log('🎯 Final scale applied:', {
+            scale: model.scale,
+            position: model.position,
+            boundingBox: { width: size.x, height: size.y, depth: size.z }
+          });
+          
+          // ✅ STORE SCALE INFO FOR ZOOM LIMITS
+          (model as any).originalScale = optimalScale;
+          (model as any).minScale = optimalScale * 0.5;  // ✅ MIN: 50% của original
+          (model as any).maxScale = optimalScale * 3.0;  // ✅ MAX: 300% của original
+    
+    console.log('✅ Dynamic scale applied:', {
+      originalScale: optimalScale,
+      minScale: optimalScale * 0.5,
+      maxScale: optimalScale * 3.0,
+      position: model.position
+    });
+    
+    return optimalScale;
+  };
+
+  // ✅ SIMPLIFIED MODEL LOADING - CHỈ LOAD MODEL THẬT, KHÔNG FALLBACK
   const loadPokemonModel = async (qrData: string) => {
     try {
+      console.log('🎯 Starting REAL model loading for:', qrData);
       setIsLoading(true);
       setLoadingProgress(10);
       setModelInfo('Đang phân tích QR code...');
-      
+
       // Parse QR data để lấy model config
       const glbConfig = getGLBModelFromQRData(qrData);
-      
+
       if (glbConfig) {
         console.log('✅ Model config found:', glbConfig.name, 'File:', glbConfig.filePath);
-        setModelInfo(`Đang tải ${glbConfig.name}...`);
+        setModelInfo(`🦊 Đang tải model GLB: ${glbConfig.name}...`);
         setLoadingProgress(30);
-        
-        try {
-          // ✅ DIRECT GLB LOADING FOR PERFECT COLORS
-          console.log(`🎯 Using DIRECT GLB loading for perfect colors`);
+
+        // ✅ SIMPLIFIED MODEL LOADING - DIRECT APPROACH
+        console.log('🎯 Using simplified model loading approach');
           setLoadingProgress(40);
-          setModelInfo(`Đang tải model ${glbConfig.name}...`);
-          
-          // ✅ REAL MODEL LOADING - TRY ASSET LOADING FIRST
-          console.log('🎯 Attempting to load real model...');
-          
-          try {
-            // ✅ METHOD 1: Direct require + loadAsync với error handling
-            const { loadAsync } = await import('expo-three');
-            let moduleId;
-            
-            // ✅ SAFE REQUIRE với try-catch
-            try {
-              if (glbConfig.filePath === 'assets/models/pokemon_scizor.glb') {
-                moduleId = require('../assets/models/pokemon_scizor.glb');
-              } else if (glbConfig.filePath === 'assets/models/Fox.glb') {
-                moduleId = require('../assets/models/Fox.glb');
-              } else {
-                throw new Error(`Unknown model filePath: ${glbConfig.filePath}`);
-              }
-            } catch (requireError) {
-              console.error('❌ Error requiring model file:', requireError);
-              throw new Error(`Model file not found: ${glbConfig.filePath}`);
+          setModelInfo(`📥 Đang tải file GLB: ${glbConfig.name}...`);
+
+        let asset: any;
+        let gltf: any;
+
+        try {
+          // ✅ SIMPLE ASSET LOADING
+          console.log('🔍 Loading asset for:', glbConfig.filePath);
+
+            if (glbConfig.filePath === 'assets/models/pokemon_scizor.glb') {
+            asset = Asset.fromModule(require('../assets/models/pokemon_scizor.glb'));
+            } else if (glbConfig.filePath === 'assets/models/Fox.glb') {
+            asset = Asset.fromModule(require('../assets/models/Fox.glb'));
+                              } else {
+              throw new Error(`Unknown model filePath: ${glbConfig.filePath}`);
             }
-            
-            // ✅ VALIDATE MODULE ID
-            if (!moduleId) {
-              throw new Error(`Module ID is undefined for: ${glbConfig.filePath}`);
-            }
-            
-            console.log('✅ Loading moduleId:', moduleId);
-            const gltf = await loadAsync(moduleId);
-            
-            if (!gltf.scene) {
-              throw new Error('No scene found in GLB file');
-            }
-            
-            const loadedModel = gltf.scene;
-            
-            // Apply config settings
-            if (glbConfig.scale) {
-              loadedModel.scale.setScalar(glbConfig.scale);
-            }
-            
-            setLoadingProgress(70);
-            setModelInfo(`Đang áp dụng cài đặt...`);
-            
-            // Position model
-            loadedModel.position.set(0, -0.5, 0);
-            
-            setLoadingProgress(85);
-            setModelInfo(`Đang tối ưu materials...`);
-            
-            // Apply rotation
-            if (glbConfig.rotation) {
-              loadedModel.rotation.set(
-                glbConfig.rotation.x,
-                glbConfig.rotation.y,
-                glbConfig.rotation.z
-              );
-            }
-            
-            modelRef.current = loadedModel;
-            
-            // Add to scene
-            if (sceneRef.current) {
-              loadedModel.renderOrder = -1;
-              sceneRef.current.add(loadedModel);
-              console.log('🎉 Real model added to scene successfully!');
-            }
-            
-            // Store original scale
-            (loadedModel as any).originalScale = glbConfig.scale || 1;
-            (loadedModel as any).isUserRotating = false;
-            
-            setLoadingProgress(100);
-            setModelInfo(`✅ ${glbConfig.name} đã sẵn sàng!`);
-            console.log('🚀 Real model loaded successfully:', glbConfig.name);
-            return;
-            
-          } catch (realLoadError) {
-            console.log('⚠️ Real model loading failed, using fallback:', realLoadError);
-            
-            // ✅ DETAILED ERROR ANALYSIS
-            const errorMessage = (realLoadError as Error).message;
-            if (errorMessage?.includes('replace')) {
-              console.error('❌ Asset URI issue - trying alternative loading method');
-              setModelInfo('Lỗi tải asset - thử phương pháp khác...');
-            } else if (errorMessage?.includes('undefined')) {
-              console.error('❌ Undefined property - asset not loaded properly');
-              setModelInfo('Asset không tải được - kiểm tra file GLB');
-            } else {
-              setModelInfo(`❌ Không thể tải ${glbConfig.name}: ${errorMessage}`);
-            }
-            
-            // ✅ FALLBACK MODEL LOADING
-            const fallbackModel = createFallbackModel(glbConfig);
-            
-            // ✅ ENSURE MODEL IS VISIBLE
-            fallbackModel.position.set(0, 0, 0);
-            fallbackModel.scale.setScalar(glbConfig.scale || 1);
-            fallbackModel.visible = true;
-            
-            // ✅ ADD TO SCENE WITH DEBUG
-            modelRef.current = fallbackModel;
-            if (sceneRef.current) {
-              sceneRef.current.add(fallbackModel);
-              console.log('🎯 Fallback model added to scene:', {
-                position: fallbackModel.position,
-                scale: fallbackModel.scale,
-                visible: fallbackModel.visible,
-                children: fallbackModel.children.length
-              });
-            } else {
-              console.warn('⚠️ Scene not available for fallback model');
-            }
-            
-            setLoadingProgress(100);
-            setModelInfo(`✅ ${glbConfig.name} (Fallback) đã sẵn sàng!`);
-            console.log('🚀 Fallback model loaded successfully:', glbConfig.name);
-            return;
+
+          console.log('✅ Asset created:', asset.uri);
+            await asset.downloadAsync();
+          console.log('✅ Asset downloaded');
+
+          // ✅ SIMPLE GLTF LOADING
+            gltf = await loadAsync(asset);
+          console.log('✅ GLTF loaded successfully');
+
+          if (!gltf || !gltf.scene) {
+            throw new Error('GLB file loaded but no scene found');
           }
-          
-        } catch (glbError) {
-          console.error(`❌ GLB loading failed for ${glbConfig.name}:`, glbError);
-          
-          // ✅ DETAILED ERROR ANALYSIS
-          const errorMessage = (glbError as Error).message;
-          if (errorMessage?.includes('replace')) {
-            console.error('❌ Asset URI issue - trying alternative loading method');
-            setModelInfo('Lỗi tải asset - thử phương pháp khác...');
-          } else if (errorMessage?.includes('undefined')) {
-            console.error('❌ Undefined property - asset not loaded properly');
-            setModelInfo('Asset không tải được - kiểm tra file GLB');
-          } else {
-            setModelInfo(`❌ Không thể tải ${glbConfig.name}: ${errorMessage}`);
-          }
-          
-          console.error(`❌ Error details:`, {
-            message: errorMessage,
-            stack: (glbError as Error).stack,
-            config: glbConfig,
-            filePath: glbConfig.filePath
+
+          const loadedModel = gltf.scene;
+          console.log('🎉 MODEL LOADED!', {
+            children: loadedModel.children?.length || 0,
+            animations: gltf.animations?.length || 0
           });
+
+          // ✅ SIMPLE MODEL SETUP
+          console.log('🔧 Setting up model...');
           
-          // Tạo fallback model thay vì show error
-          const fallbackModel = createFallbackModel(glbConfig);
-          modelRef.current = fallbackModel;
+          // ✅ SCALE WILL BE CALCULATED BY calculateOptimalScale() LATER
+          
+          console.log('✅ Model setup complete');
+
+          // ✅ SIMPLE MATERIAL SETUP
+          console.log('🎨 Setting up materials...');
+                loadedModel.traverse((child: any) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+
+              if (child.material) {
+                        child.material.needsUpdate = true;
+                console.log('✅ Material updated for mesh:', child.name);
+                    }
+                  }
+                });
+
+          // ✅ SIMPLE ANIMATION SETUP
+          if (gltf.animations && gltf.animations.length > 0) {
+            console.log('🎬 Setting up animations...');
+            mixerRef.current = new THREE.AnimationMixer(loadedModel);
+            
+            const firstClip = gltf.animations[0];
+            const action = mixerRef.current.clipAction(firstClip);
+            action.play();
+            console.log('✅ Animation setup complete');
+          }
+
+          // ✅ ADD MODEL TO SCENE - SIMPLIFIED
+          console.log('🎯 Adding model to scene...');
           
           if (sceneRef.current) {
-            sceneRef.current.add(fallbackModel);
+            // Clear existing models
+            sceneRef.current.clear();
+            
+            // Add lighting back
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            sceneRef.current.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            sceneRef.current.add(directionalLight);
+            
+            // Add model to scene
+            sceneRef.current.add(loadedModel);
+            modelRef.current = loadedModel;
+            
+            // ✅ APPLY DYNAMIC SCALE SYSTEM
+            console.log('📐 Applying dynamic scale system...');
+            calculateOptimalScale(loadedModel);
+            
+            // ✅ SHOW GESTURE HINT KHI MODEL LOAD XONG
+            console.log('🎯 Showing gesture hint for loaded model');
+            setShowGestureHint(true);
+            console.log('🎯 showGestureHint set to true');
+            
+            // ✅ FORCE RE-RENDER ĐỂ ĐẢM BẢO UI UPDATE
+            setTimeout(() => {
+              console.log('🎯 Force re-render gesture hint');
+              setShowGestureHint(true);
+              console.log('🎯 showGestureHint after force re-render:', true);
+            }, 100);
+            
+            // ✅ SET AUTO-HIDE TIMEOUT SAU KHI MODEL LOAD XONG
+            setTimeout(() => {
+              console.log(`🎯 Auto-hiding gesture hint after 5 seconds`);
+              setShowGestureHint(false);
+            }, 5000);
+            
+            console.log('✅ Model added to scene successfully');
+            console.log('✅ Scene children count:', sceneRef.current.children.length);
+            } else {
+            console.error('❌ Scene not available for adding model');
           }
           
-          setLoadingProgress(90);
-          setModelInfo(`⚠️ ${glbConfig.name} - Sử dụng fallback model`);
+        } catch (loadError) {
+          console.error('❌ loadAsync failed:', loadError);
+          throw loadError;
         }
         
+        // ✅ COMPLETE LOADING
         setLoadingProgress(100);
         setIsLoading(false);
+        setModelInfo(`✅ ${glbConfig.name} loaded successfully!`);
         
-      } else {
+        console.log('🎉 MODEL LOADING COMPLETE!');
+
+          } else {
         // Không tìm thấy model
         console.warn('⚠️ Unknown Pokemon model ID');
         setModelInfo('⚠️ Pokemon model không tồn tại');
-        
+
         Alert.alert(
           '⚠️ Model không tồn tại',
           'QR code không chứa Pokemon model hợp lệ. Vui lòng thử QR code khác.',
           [{ text: 'OK' }]
         );
-        
+
         setIsLoading(false);
       }
       
-    } catch (error) {
+                    } catch (error) {
       console.error('❌ Error loading Pokemon model:', error);
       setModelInfo('❌ Lỗi tải Pokemon model');
-      
-      Alert.alert(
-        '❌ Lỗi hệ thống',
-        'Có lỗi xảy ra khi tải Pokemon model. Vui lòng thử lại.',
-        [{ text: 'OK' }]
-      );
-      
       setIsLoading(false);
     }
   };
@@ -753,6 +626,11 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const camera = new THREE.PerspectiveCamera(75, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
       const renderer = new Renderer({ gl });
       
+      // ✅ LƯU SCENE VÀO REF
+      sceneRef.current = scene;
+      cameraRef.current = camera;
+      rendererRef.current = renderer;
+      
       // ✅ Nếu model đã được load trước đó, add vào scene ngay
       if (modelRef.current) {
         scene.add(modelRef.current);
@@ -762,15 +640,22 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       // ✅ SETUP CAMERA - BETTER POSITION FOR FALLBACK MODELS
       camera.position.set(0, 1.0, 4.0); // ✅ Closer and higher for better visibility
       camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
+      console.log('🎯 Camera position:', camera.position);
       renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
       renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
+      // @ts-ignore - alpha property for transparency
+      renderer.alpha = true; // ✅ ENABLE ALPHA CHANNEL
+      
+      // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+      // Sử dụng touch handlers tự implement thay thế
+      console.log('🎮 Using custom touch handlers for React Native compatibility');
       
       // ✅ MÀU SẮC CHUẨN SRGB CHO ĐỘ CHÍNH XÁC CAO
       // @ts-ignore - tương thích nhiều phiên bản three
       if ((renderer as any).outputColorSpace !== undefined) {
         // @ts-ignore
         (renderer as any).outputColorSpace = THREE.SRGBColorSpace;
-      } else {
+                              } else {
         // @ts-ignore
         renderer.outputEncoding = THREE.sRGBEncoding;
       }
@@ -787,10 +672,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-      // ✅ STORE REFERENCES
-      sceneRef.current = scene; // Lưu scene reference
-      cameraRef.current = camera; // Lưu camera reference cho raycasting
-      rendererRef.current = renderer; // Lưu renderer reference
+      // ✅ REFERENCES ĐÃ ĐƯỢC LƯU Ở TRÊN
 
         // ✅ ÁNH SÁNG TỐI ƯU CHO MÀU ĐỎ SCIZOR
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Tăng ambient cho màu đỏ
@@ -827,6 +709,8 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
       const animate = () => {
         timeoutRef.current = setTimeout(animate, 1000 / 30); // ✅ GIẢM XUỐNG 30 FPS CHO HIỆU SUẤT
 
+        // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+
         // ✅ UPDATE ANIMATION MIXER
         const delta = clockRef.current.getDelta();
         if (mixerRef.current) {
@@ -855,17 +739,13 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           // ✅ BREATHING ANIMATION - TỐI ƯU!
           if ((modelRef.current as any).animate) {
             (modelRef.current as any).animate();
-          } else {
-            // ✅ TỐI ƯU BREATHING - CHỈ KHI CẦN THIẾT
-            const originalScale = (modelRef.current as any).originalScale || 1;
-            const breathingScale = originalScale + Math.sin(time * 1.0) * 0.03; // ✅ GIẢM FREQUENCY VÀ AMPLITUDE
-            modelRef.current.scale.setScalar(breathingScale);
+                              } else {
+            // ✅ MODEL HOÀN TOÀN TĨNH - ĐỂ USER TRẢI NGHIỆM CỬ CHỈ TỰ NHIÊN
+            // Breathing effect đã tắt để model đứng yên hoàn toàn
           }
           
-          // ✅ TỰ ĐỘNG XOAY - GIẢM TỐC ĐỘ
-          if (!(modelRef.current as any).isUserRotating) {
-            modelRef.current.rotation.y += 0.02; // ✅ TĂNG NHẸ để thấy rõ
-          }
+          // ✅ MODEL ĐỨNG YÊN BAN ĐẦU - ĐỂ USER TRẢI NGHIỆM CỬ CHỈ TỰ NHIÊN
+          // Auto-rotation đã tắt để user có thể khám phá cử chỉ một cách tự nhiên
           
           // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN
           const modelPosition = modelRef.current.position;
@@ -891,8 +771,8 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
     } catch (error) {
       console.error('Error creating 3D context:', error);
-      setIsLoading(false);
-    }
+              setIsLoading(false);
+            }
   };
 
   if (hasPermission === null) {
@@ -907,9 +787,9 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     return (
       <View style={styles.container}>
         <Text style={styles.text}>❌ Không có quyền truy cập camera</Text>
-        <TouchableOpacity style={styles.button} onPress={onClose}>
+        <View style={styles.button} onTouchEnd={onClose}>
           <Text style={styles.buttonText}>Quay lại</Text>
-        </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -917,27 +797,33 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
   return (
     <GestureHandlerRootView style={styles.container}>
       {/* Camera làm background */}
-      <CameraView 
-        style={styles.camera} 
+      <CameraView
+        style={styles.camera}
         facing="back"
         onBarcodeScanned={scannedData ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'pdf417'],
         }}
+        pointerEvents="none"
       />
 
-      {/* ✅ FIX: TOUCH HANDLER TRỰC TIẾP VỚI GLVIEW */}
-      <View 
-        style={styles.glContainer}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        <GLView
-          style={styles.glView}
-          onContextCreate={onContextCreate}
-        />
-      </View>
+      {/* ✅ SEPARATE GLVIEW AND PANRESPONDER - XỬ LÝ CỬ CHỈ LIÊN TỤC */}
+      {/* ✅ GLVIEW RIÊNG BIỆT - KHÔNG CHẶN TOUCH EVENTS */}
+      <GLView
+        style={styles.glView}
+        onContextCreate={onContextCreate}
+        pointerEvents="none"
+      />
+
+      {/* ✅ PANRESPONDER RIÊNG BIỆT - XỬ LÝ CỬ CHỈ LIÊN TỤC */}
+      <View
+        style={styles.touchWrapper}
+        {...panResponder.panHandlers}
+        onLayout={(evt) => {
+          console.log('🎮 PanResponder layout:', evt.nativeEvent.layout);
+          console.log('🎮 PanResponder zIndex: 1001, elevation: 1001');
+        }}
+      />
 
       {/* Loading Overlay */}
       {isLoading && (
@@ -945,12 +831,12 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           <View style={styles.loadingCard}>
             <ActivityIndicator size="large" color="#FFD700" />
             <Text style={styles.loadingText}>{modelInfo}</Text>
-            
+
             <View style={styles.progressBarContainer}>
               <View style={[styles.progressBar, { width: `${loadingProgress}%` }]} />
             </View>
             <Text style={styles.progressText}>{loadingProgress}%</Text>
-            
+
             <Text style={styles.systemInfo}>🎮 Pokemon AR System</Text>
           </View>
         </View>
@@ -976,7 +862,7 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             )}
           </View>
         )}
-        
+
         {/* ✅ REMOVED INSTRUCTION TEXT AS REQUESTED */}
 
         {/* ✅ CHỈ HIỆN KHI ĐANG LOADING ĐỂ TRÁNH RỐI UI */}
@@ -986,12 +872,23 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           </Text>
         )}
 
-        <TouchableOpacity 
+        {/* ✅ GESTURE HINT - HƯỚNG DẪN TƯƠNG TÁC */}
+        {scannedData && !isLoading && showGestureHint && (
+          <View style={styles.gestureHint}>
+            <Text style={styles.gestureHintText}>
+              👆 Vuốt để xoay • 🤏 Chụm để zoom
+            </Text>
+          </View>
+        )}
+
+
+
+        <View
           style={styles.closeButton}
-          onPress={onClose}
+          onTouchEnd={onClose}
         >
           <Text style={styles.closeText}>❌ Đóng</Text>
-        </TouchableOpacity>
+        </View>
       </View>
     </GestureHandlerRootView>
   );
@@ -1003,7 +900,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   camera: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   glContainer: {
     position: 'absolute',
@@ -1017,9 +918,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     pointerEvents: 'box-none',
   },
+  touchWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1001, // ✅ CAO HƠN GESTURE HINT VÀ DEBUG INFO
+    backgroundColor: 'transparent',
+    elevation: 1001, // Android elevation
+  },
   glView: {
-    width: '100%',
-    height: '100%',
+    flex: 1,
+    backgroundColor: 'transparent',
   },
   overlay: {
     position: 'absolute',
@@ -1172,6 +1083,40 @@ const styles = StyleSheet.create({
   text: {
     color: '#fff',
     fontSize: 16,
+    textAlign: 'center',
+  },
+  // ✅ GESTURE HINT STYLES
+  gestureHint: {
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    zIndex: 1000,
+    pointerEvents: 'none',
+  },
+  gestureHintText: {
+    color: '#FFD700',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  // ✅ DEBUG STYLES
+  debugInfo: {
+    backgroundColor: 'rgba(255,0,0,0.8)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    marginTop: 10,
+    zIndex: 1000,
+    pointerEvents: 'none',
+  },
+  debugText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
     textAlign: 'center',
   },
 });

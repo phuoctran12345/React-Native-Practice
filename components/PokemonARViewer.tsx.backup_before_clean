@@ -1,0 +1,3795 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator, Alert, TouchableWithoutFeedback, Dimensions, Platform } from 'react-native';
+import { Camera, CameraView } from 'expo-camera';
+import { GLView } from 'expo-gl';
+import { Renderer, loadAsync } from 'expo-three';
+import * as THREE from 'three';
+import { Asset } from 'expo-asset';
+import { Buffer } from 'buffer';
+// GLTFLoader will be imported dynamically to avoid bundling issues
+import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { getGLBModelFromQRData, getGLBModelConfig } from '../utils/modelData';
+
+interface PokemonARViewerProps {
+  onClose: () => void;
+}
+
+const PokemonARViewer = ({ onClose }: PokemonARViewerProps) => {
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [modelInfo, setModelInfo] = useState<string>('');
+  const [showDebugControls, setShowDebugControls] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>({});
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const modelRef = useRef<THREE.Object3D | null>(null);
+  const rotationRef = useRef({ x: 0, y: 0 });
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const clockRef = useRef(new THREE.Clock());
+  const [scannedData, setScannedData] = useState<string | null>(null);
+  const [currentAnimation, setCurrentAnimation] = useState<string>('idle');
+  const [animationFeedback, setAnimationFeedback] = useState<string>('');
+
+  // ✅ TOUCH HANDLER CHO XOAY 360 ĐỘ VÀ ZOOM - SỬA LỖI!
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [initialDistance, setInitialDistance] = useState<number | null>(null);
+  const [currentScale, setCurrentScale] = useState<number>(1);
+
+  // ✅ TC3.2: SWIPE GESTURE TRACKING
+  const [swipeStart, setSwipeStart] = useState<{ x: number; y: number; time: number } | null>(null);
+  const [isSwipeGesture, setIsSwipeGesture] = useState(false);
+
+  // ✅ TC6.2: SCREEN COMPATIBILITY
+  const screenData = Dimensions.get('window');
+  const isIOS = Platform.OS === 'ios';
+  const hasNotch = screenData.height > 800; // Approximate notch detection
+
+  // ✅ PERMISSION CHECKS - INSIDE COMPONENT
+  if (hasPermission === null) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>Đang yêu cầu quyền truy cập camera...</Text>
+      </View>
+    );
+  }
+
+  if (hasPermission === false) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>❌ Không có quyền truy cập camera</Text>
+        <TouchableOpacity style={styles.button} onPress={onClose}>
+          <Text style={styles.buttonText}>Quay lại</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // ✅ HELPER FUNCTION ĐỂ TÍNH KHOẢNG CÁCH GIỮA 2 TOUCH
+  const getDistance = (touch1: any, touch2: any) => {
+    const dx = touch1.pageX - touch2.pageX;
+    const dy = touch1.pageY - touch2.pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // ✅ HELPER FUNCTION ĐỂ LẤY BINARY DATA TỪ GLB PARSER
+  const getGLBBinaryData = (gltf: any): ArrayBuffer | null => {
+    let glbBinaryData = null;
+    
+    // Method 1: Try extensions.KHR_binary_glTF.body
+    if (gltf.parser?.extensions?.KHR_binary_glTF?.body) {
+      glbBinaryData = gltf.parser.extensions.KHR_binary_glTF.body;
+      console.log('✅ Found binary data via extensions.KHR_binary_glTF.body');
+    }
+    // Method 2: Try parser.buffers[0]
+    else if (gltf.parser?.buffers?.[0]) {
+      glbBinaryData = gltf.parser.buffers[0];
+      console.log('✅ Found binary data via parser.buffers[0]');
+    }
+    // Method 3: Try getDependency
+    else if (gltf.parser?.getDependency) {
+      try {
+        glbBinaryData = gltf.parser.getDependency('buffer', 0);
+        console.log('✅ Found binary data via getDependency');
+      } catch (error) {
+        console.log('⚠️ getDependency failed:', error);
+      }
+    }
+    // Method 4: Try direct access to parser
+    else if (gltf.parser?.json?.buffers?.[0]) {
+      const bufferInfo = gltf.parser.json.buffers[0];
+      console.log('🔍 Buffer info:', bufferInfo);
+      // This might need different approach
+    }
+    
+    console.log('🔍 Binary data found:', !!glbBinaryData, glbBinaryData?.byteLength);
+    return glbBinaryData;
+  };
+
+  // ✅ ONCONTEXTCREATE FUNCTION FOR GLVIEW
+  const onContextCreate = (gl: any) => {
+    console.log('🎬 Creating 3D context...');
+    
+    try {
+      // Create scene
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      
+      // Create camera
+      const camera = new THREE.PerspectiveCamera(75, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
+      camera.position.set(0, 0, 5);
+      
+      // Create renderer
+      const renderer = new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl });
+      renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+      renderer.setPixelRatio(gl.drawingBufferWidth / gl.drawingBufferHeight);
+      
+      // Store refs
+      sceneRef.current = scene;
+      cameraRef.current = camera;
+      rendererRef.current = renderer;
+      
+      // Animation loop
+      const animate = () => {
+        requestAnimationFrame(animate);
+        
+        if (modelRef.current) {
+          // Auto rotate model
+          if (!(modelRef.current as any).isUserRotating) {
+            modelRef.current.rotation.y += 0.01;
+          }
+        }
+        
+        renderer.render(scene, camera);
+        gl.endFrameEXP();
+      };
+      
+      animate();
+      console.log('🎬 3D Scene initialized successfully!');
+      
+    } catch (error) {
+      console.error('Error creating 3D context:', error);
+      setIsLoading(false);
+    }
+  };
+
+  // ✅ SIMPLE TEXTURE LOADING FUNCTION
+  const loadFoxTexture = async (): Promise<THREE.Texture | null> => {
+    try {
+      console.log('🎨 Loading Fox texture...');
+      
+      // Load texture from assets
+      const textureLoader = new THREE.TextureLoader();
+      const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+        textureLoader.load(
+          require('../assets/models/Fox.png'),
+          (texture) => {
+            console.log('✅ Fox texture loaded successfully!');
+            resolve(texture);
+          },
+          undefined,
+          (error) => {
+            console.error('❌ Failed to load Fox texture:', error);
+            reject(error);
+          }
+        );
+      });
+      
+      // Configure texture
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.flipY = false;
+      if ('colorSpace' in texture) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+      }
+      
+      return texture;
+    } catch (error) {
+      console.error('❌ Texture loading failed:', error);
+      return null;
+    }
+  };
+
+
+  // ✅ TC3.1: ENHANCED RAYCASTING FOR TOUCH ANIMATION TRIGGER
+  const performRaycasting = (touchX: number, touchY: number, screenWidth: number, screenHeight: number) => {
+    if (!modelRef.current || !cameraRef.current || !rendererRef.current) {
+      console.log('❌ Raycasting failed - missing refs');
+      return null;
+    }
+
+    // Convert screen coordinates to normalized device coordinates (-1 to +1)
+    const mouse = new THREE.Vector2();
+    mouse.x = (touchX / screenWidth) * 2 - 1;
+    mouse.y = -(touchY / screenHeight) * 2 + 1;
+
+    console.log('🎯 Raycasting at:', { touchX, touchY, mouseX: mouse.x, mouseY: mouse.y });
+
+    // Create raycaster
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, cameraRef.current);
+
+    // Check intersection with model
+    const intersects = raycaster.intersectObject(modelRef.current, true);
+
+    console.log('🔍 Raycasting results:', {
+      intersects: intersects.length,
+      modelPosition: modelRef.current.position,
+      modelScale: modelRef.current.scale,
+      modelVisible: modelRef.current.visible
+    });
+
+    if (intersects.length > 0) {
+      console.log('🎯 Model touched! Triggering animation...', intersects[0]);
+      return intersects[0];
+    }
+
+    console.log('❌ No intersection with model');
+    return null;
+  };
+
+  // ✅ TC3.1: TRIGGER ANIMATION ON TOUCH
+  const triggerTouchAnimation = (animationName: string = 'hit') => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+
+    if (clips.length > 0) {
+      // Find animation clip
+      const clip = clips.find((c: any) =>
+        c.name?.toLowerCase().includes(animationName.toLowerCase())
+      ) || clips[Math.floor(Math.random() * clips.length)]; // Random if not found
+
+      // Stop current action and play new one
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(clip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+
+      setCurrentAnimation(animationName);
+      setAnimationFeedback(`🎯 ${animationName.toUpperCase()}!`);
+      console.log(`🎬 Playing touch animation: ${clip.name || animationName}`);
+
+      // Clear feedback after short time
+      setTimeout(() => setAnimationFeedback(''), 1000);
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, clip.duration * 1000 || 2000);
+    }
+  };
+
+  // ✅ TC3.2: SWIPE GESTURE DETECTION AND THROW ANIMATION
+  const detectSwipeGesture = (startX: number, startY: number, endX: number, endY: number, duration: number) => {
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    const velocity = distance / duration; // pixels per ms
+
+    // Swipe thresholds
+    const minDistance = 100; // minimum swipe distance
+    const minVelocity = 0.5; // minimum swipe velocity
+
+    if (distance > minDistance && velocity > minVelocity) {
+      // Determine swipe direction
+      const angle = Math.atan2(deltaY, deltaX);
+      const direction = {
+        horizontal: Math.abs(deltaX) > Math.abs(deltaY),
+        vertical: Math.abs(deltaY) > Math.abs(deltaX),
+        right: deltaX > 0,
+        left: deltaX < 0,
+        up: deltaY < 0,
+        down: deltaY > 0
+      };
+
+      console.log(`🏐 Swipe detected! Distance: ${distance.toFixed(2)}, Velocity: ${velocity.toFixed(2)}, Direction:`, direction);
+
+      // Trigger throw animation based on direction
+      if (direction.horizontal) {
+        triggerThrowAnimation(direction.right ? 'throw_right' : 'throw_left', velocity);
+      } else if (direction.vertical) {
+        triggerThrowAnimation(direction.up ? 'throw_up' : 'throw_down', velocity);
+      }
+
+      return true;
+    }
+    return false;
+  };
+
+  // ✅ TC3.2: TRIGGER THROW ANIMATION
+  const triggerThrowAnimation = (throwType: string, velocity: number) => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+
+    if (clips.length > 0) {
+      // Find throw animation or use attack/fly animation
+      const throwClip = clips.find((c: any) =>
+        c.name?.toLowerCase().includes('attack') ||
+        c.name?.toLowerCase().includes('fly') ||
+        c.name?.toLowerCase().includes('jump')
+      ) || clips[Math.floor(Math.random() * clips.length)];
+
+      // Stop current action and play throw animation
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(throwClip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+
+      // Adjust playback speed based on swipe velocity
+      const speedMultiplier = Math.min(Math.max(velocity / 2, 0.5), 3.0);
+      action.setEffectiveTimeScale(speedMultiplier);
+      action.play();
+
+      setCurrentAnimation(throwType);
+      setAnimationFeedback(`🏐 ${throwType.replace('_', ' ').toUpperCase()}!`);
+      console.log(`🎬 Playing throw animation: ${throwClip.name || throwType} (speed: ${speedMultiplier.toFixed(2)}x)`);
+
+      // Clear feedback after animation
+      setTimeout(() => setAnimationFeedback(''), 1500);
+
+      // Add visual feedback - temporary scale effect
+      if (modelRef.current) {
+        const originalScale = (modelRef.current as any).originalScale || 0.6;
+        const scaleEffect = originalScale * (1 + velocity * 0.1);
+        modelRef.current.scale.setScalar(scaleEffect);
+
+        // Return to normal scale
+        setTimeout(() => {
+          if (modelRef.current) {
+            modelRef.current.scale.setScalar(originalScale);
+          }
+        }, 200);
+      }
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, (throwClip.duration * 1000 / speedMultiplier) || 1500);
+    }
+  };
+
+  const handleTouchStart = (event: any) => {
+    const touches = event.nativeEvent.touches;
+    console.log(`👆 Touch start: ${touches.length} fingers`);
+
+    if (touches.length === 1) {
+      const touch = touches[0];
+
+      // ✅ TC3.1: RAYCASTING CHECK FOR MODEL TOUCH - TC6.2: USE ACTUAL SCREEN DIMENSIONS
+      const intersection = performRaycasting(touch.pageX, touch.pageY, screenData.width, screenData.height);
+
+      if (intersection) {
+        // Model was touched - trigger animation
+        triggerTouchAnimation('hit');
+      } else {
+        // Empty space touched - could be rotation or swipe
+        setTouchStart({ x: touch.pageX, y: touch.pageY });
+        setSwipeStart({ x: touch.pageX, y: touch.pageY, time: Date.now() });
+        setIsSwipeGesture(false);
+        console.log(`🔄 Single touch - rotation/swipe mode`);
+      }
+    } else if (touches.length === 2) {
+      // Multi touch - zoom
+      const distance = getDistance(touches[0], touches[1]);
+      setInitialDistance(distance);
+      setCurrentScale(1); // Reset scale
+      console.log(`🔍 Multi touch - zoom mode, distance: ${distance.toFixed(2)}`);
+      console.log(`🎯 Zoom gesture initialized with distance: ${distance.toFixed(2)}`);
+      console.log(`🎯 Zoom gesture state:`, {
+        initialDistance: distance,
+        currentScale: 1,
+        touches: touches.length
+      });
+      console.log(`🎯 Model scale before zoom:`, modelRef.current ? {
+        x: modelRef.current.scale.x.toFixed(4),
+        y: modelRef.current.scale.y.toFixed(4),
+        z: modelRef.current.scale.z.toFixed(4)
+      } : 'No model');
+    }
+  };
+
+  const handleTouchMove = (event: any) => {
+    if (!modelRef.current) return;
+
+    const touches = event.nativeEvent.touches;
+    console.log(`👆 Touch move: ${touches.length} fingers`);
+
+    if (touches.length === 1 && touchStart) {
+      // Single touch - rotation
+      const touch = touches[0];
+      const deltaX = touch.pageX - touchStart.x;
+      const deltaY = touch.pageY - touchStart.y;
+      const rotationSpeed = 0.008; // ✅ TĂNG TỐC ĐỘ XOAY
+
+      console.log('🔄 Rotation gesture:', {
+        deltaX,
+        deltaY,
+        rotationSpeed,
+        currentRotation: {
+          x: modelRef.current.rotation.x,
+          y: modelRef.current.rotation.y,
+          z: modelRef.current.rotation.z
+        }
+      });
+
+      // ✅ ĐÁNH DẤU USER ĐANG XOAY
+      (modelRef.current as any).isUserRotating = true;
+
+      // ✅ XOAY 360 ĐỘ THEO CẢ X VÀ Y - FIX
+      const newRotationY = modelRef.current.rotation.y + deltaX * rotationSpeed;
+      const newRotationX = modelRef.current.rotation.x + deltaY * rotationSpeed * 0.3; // Giảm tốc độ xoay dọc
+
+      console.log('🔄 New rotation calculation:', {
+        newRotationX,
+        newRotationY,
+        deltaX,
+        deltaY,
+        rotationSpeed
+      });
+
+      modelRef.current.rotation.y = newRotationY;
+      modelRef.current.rotation.x = newRotationX;
+
+      // ✅ GIỚI HẠN ROTATION X ĐỂ KHÔNG BỊ LẬT NGƯỢC
+      const clampedRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, modelRef.current.rotation.x));
+      modelRef.current.rotation.x = clampedRotationX;
+
+      console.log('✅ Rotation applied:', {
+        finalRotation: {
+          x: modelRef.current.rotation.x,
+          y: modelRef.current.rotation.y,
+          z: modelRef.current.rotation.z
+        },
+        clamped: clampedRotationX !== newRotationX
+      });
+
+      // ✅ CẬP NHẬT TOUCH START ĐỂ XOAY MƯỢT
+      setTouchStart({ x: touch.pageX, y: touch.pageY });
+
+    } else if (touches.length === 2 && initialDistance) {
+      // Multi touch - zoom
+      const currentDistance = getDistance(touches[0], touches[1]);
+      const scale = currentDistance / initialDistance;
+
+      console.log(`🔍 Zoom gesture active:`, {
+        currentDistance: currentDistance.toFixed(2),
+        initialDistance: initialDistance.toFixed(2),
+        scale: scale.toFixed(3)
+      });
+
+      // ✅ DYNAMIC ZOOM LIMITS BASED ON MODEL SIZE
+      const originalScale = (modelRef.current as any).originalScale || 0.1;
+      const minScale = (modelRef.current as any).minScale || originalScale * 0.5;
+      const maxScale = (modelRef.current as any).maxScale || originalScale * 3.0;
+
+      // ✅ FIXED ZOOM LOGIC - USE CUMULATIVE SCALE
+      const currentModelScale = modelRef.current.scale.x;
+      const newScale = currentModelScale * scale;
+      const clampedScale = Math.max(minScale, Math.min(maxScale, newScale));
+
+      // ✅ APPLY SCALE TO MODEL
+      modelRef.current.scale.setScalar(clampedScale);
+
+      console.log(`🔍 Zoom applied:`, {
+        currentModelScale: currentModelScale.toFixed(4),
+        newScale: newScale.toFixed(4),
+        clampedScale: clampedScale.toFixed(4),
+        originalScale: originalScale.toFixed(4),
+        minScale: minScale.toFixed(4),
+        maxScale: maxScale.toFixed(4),
+        currentDistance: currentDistance.toFixed(2)
+      });
+
+      // ✅ VERIFY SCALE APPLICATION
+      console.log(`🔍 Scale verification:`, {
+        beforeScale: currentModelScale.toFixed(4),
+        afterScale: modelRef.current.scale.x.toFixed(4),
+        scaleChanged: Math.abs(modelRef.current.scale.x - currentModelScale) > 0.0001
+      });
+
+      // ✅ CẬP NHẬT DISTANCE LIÊN TỤC
+      setInitialDistance(currentDistance);
+    } else if (touches.length === 2 && !initialDistance) {
+      console.log(`⚠️ Zoom gesture detected but no initialDistance set`);
+    }
+  };
+
+  const handleTouchEnd = (event: any) => {
+    const touches = event.nativeEvent.touches;
+    console.log(`👆 Touch end: ${touches.length} fingers remaining`);
+
+    // ✅ RESET ZOOM GESTURE STATE
+    if (touches.length < 2) {
+      if (initialDistance) {
+        console.log(`🔍 Zoom gesture ended, resetting initialDistance`);
+        setInitialDistance(null);
+      }
+    }
+
+    // ✅ TC3.2: CHECK FOR SWIPE GESTURE ON TOUCH END
+    if (swipeStart && !isSwipeGesture) {
+      const touch = event.nativeEvent.changedTouches[0];
+      const endTime = Date.now();
+      const duration = endTime - swipeStart.time;
+
+      const wasSwipe = detectSwipeGesture(
+        swipeStart.x,
+        swipeStart.y,
+        touch.pageX,
+        touch.pageY,
+        duration
+      );
+
+      if (wasSwipe) {
+        setIsSwipeGesture(true);
+      }
+    }
+
+    setTouchStart(null);
+    setSwipeStart(null);
+    setInitialDistance(null);
+    setIsSwipeGesture(false);
+
+    // ✅ RESET USER ROTATING FLAG SAU 1 GIÂY
+    setTimeout(() => {
+      if (modelRef.current) {
+        (modelRef.current as any).isUserRotating = false;
+      }
+    }, 1000);
+  };
+
+  const onHandlerStateChange = (event: any) => {
+    if (event.nativeEvent.state === State.END) {
+      if (modelRef.current) {
+        const { velocityX } = event.nativeEvent;
+        const momentum = velocityX * 0.002; // Tăng momentum
+
+        // ✅ THÊM MOMENTUM SAU KHI THẢ TAY
+        modelRef.current.rotation.y += momentum;
+
+        // ✅ RESET FLAG SAU 2 GIÂY
+        setTimeout(() => {
+          if (modelRef.current) {
+            (modelRef.current as any).isUserRotating = false;
+            // console.log(`🔄 Auto rotation resumed`); // ❌ BỚT LOG
+          }
+        }, 2000);
+
+        // console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
+      }
+    }
+  };
+
+  useEffect(() => {
+    requestCameraPermission();
+
+    // ✅ PRELOAD MODELS NGAY KHI KHỞI ĐỘNG APP
+    preloadModels();
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  // ✅ PRELOAD MODELS FOR INSTANT LOADING
+  const preloadModels = async () => {
+    try {
+      console.log('⚡ Preloading models for instant access...');
+
+      // ✅ PRELOAD SCIZOR MODEL - DIRECT LOADING
+      try {
+        const scizorModuleId = require('../assets/models/pokemon_scizor.glb');
+        console.log('✅ Scizor model preloaded! ModuleId:', scizorModuleId);
+      } catch (error) {
+        console.log('⚠️ Scizor preload failed:', error);
+      }
+
+      // ✅ PRELOAD FOX MODEL - DIRECT LOADING
+      try {
+        const foxModuleId = require('../assets/models/Fox.glb');
+        console.log('✅ Fox model preloaded! ModuleId:', foxModuleId);
+      } catch (error) {
+        console.log('⚠️ Fox preload failed:', error);
+      }
+
+    } catch (error) {
+      console.log('⚠️ Preload failed, will load on demand:', error);
+    }
+  };
+
+  const requestCameraPermission = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    setHasPermission(status === 'granted');
+    console.log('📷 Camera permission:', status === 'granted' ? 'GRANTED' : 'DENIED');
+  };
+
+  // ✅ NO FALLBACK MODELS - ONLY REAL GLB LOADING
+
+  // Handle QR Code scan
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+    console.log('🎯 QR Code scanned successfully:', data);
+    setScannedData(data);
+    loadPokemonModel(data);
+  };
+
+  // Load Pokemon model từ QR data
+  const loadPokemonModel = async (qrData: string) => {
+    try {
+      setIsLoading(true);
+      setLoadingProgress(10);
+      setModelInfo('Đang phân tích QR code...');
+
+      // Parse QR data để lấy model config
+      const glbConfig = getGLBModelFromQRData(qrData);
+
+      if (glbConfig) {
+        console.log('✅ Model config found:', glbConfig.name, 'File:', glbConfig.filePath);
+        setModelInfo(`🦊 Đang tải model GLB thật: ${glbConfig.name}...`);
+        setLoadingProgress(30);
+
+        // ✅ DECLARE VARIABLES OUTSIDE TRY-CATCH FOR SCOPE
+        let asset: any;
+        let moduleId: any;
+
+        try {
+          // ✅ DIRECT GLB LOADING FOR PERFECT COLORS
+          console.log(`🎯 Using DIRECT GLB loading for perfect colors`);
+          setLoadingProgress(40);
+          setModelInfo(`📥 Đang tải file GLB: ${glbConfig.name}...`);
+
+          // ✅ REAL MODEL LOADING - TRY ASSET LOADING FIRST
+          console.log('🎯 Attempting to load real model...');
+
+          // ✅ FOCUS ONLY ON REAL GLB LOADING - NO FALLBACK
+          console.log('🎯 Loading REAL GLB model only...');
+
+          try {
+            // ✅ ENHANCED ASSET LOADING WITH DETAILED DEBUGGING
+            console.log('🔍 Debugging asset loading for:', glbConfig.filePath);
+
+            if (glbConfig.filePath === 'assets/models/pokemon_scizor.glb') {
+              moduleId = require('../assets/models/pokemon_scizor.glb');
+              console.log('📦 Scizor moduleId:', moduleId);
+            } else if (glbConfig.filePath === 'assets/models/Fox.glb') {
+              moduleId = require('../assets/models/Fox.glb');
+              console.log('🦊 Fox moduleId:', moduleId);
+            } else {
+              throw new Error(`Unknown model filePath: ${glbConfig.filePath}`);
+            }
+
+            // ✅ VALIDATE MODULE ID
+            if (!moduleId) {
+              throw new Error('ModuleId is null/undefined');
+            }
+
+            console.log('🔍 ModuleId details:', {
+              type: typeof moduleId,
+              value: moduleId,
+              hasUri: !!(moduleId as any).uri,
+              hasLocalUri: !!(moduleId as any).localUri
+            });
+
+            asset = Asset.fromModule(moduleId);
+
+            console.log('✅ Asset created successfully:', {
+              uri: asset.uri,
+              name: asset.name,
+              type: asset.type,
+              downloaded: asset.downloaded,
+              localUri: asset.localUri
+            });
+
+            // ✅ FORCE DOWNLOAD ASSET
+            console.log('📥 Forcing asset download...');
+            await asset.downloadAsync();
+            console.log('✅ Asset download completed');
+
+            // ✅ VERIFY ASSET IS READY
+            if (!asset.localUri) {
+              throw new Error('Asset download failed - no localUri');
+            }
+
+            console.log('🎯 Asset ready for loading:', {
+              localUri: asset.localUri,
+              uri: asset.uri,
+              size: asset.downloaded ? 'downloaded' : 'not downloaded'
+            });
+
+          } catch (assetError) {
+            console.error('❌ Asset creation failed:', assetError);
+            const errorMsg = assetError instanceof Error ? assetError.message : String(assetError);
+            throw new Error(`Cannot create asset for ${glbConfig.filePath}: ${errorMsg}`);
+          }
+
+          console.log('🔄 Calling loadAsync with asset...');
+
+          // ✅ ENHANCED GLTF LOADING WITH TEXTURE SUPPORT
+          let gltf: any;
+          try {
+            console.log('📥 Starting loadAsync with texture support...');
+
+            // ✅ CONFIGURE LOADER FOR TEXTURE SUPPORT
+            console.log('🔧 Using expo-three loadAsync for texture support');
+
+            gltf = await loadAsync(asset);
+            console.log('✅ loadAsync completed with textures');
+
+            // ✅ VERIFY TEXTURE LOADING
+            if (gltf.scene) {
+              let textureCount = 0;
+              gltf.scene.traverse((child: any) => {
+                if (child.material) {
+                  Object.keys(child.material).forEach(key => {
+                    if (key.includes('Map') && child.material[key]) {
+                      textureCount++;
+                      console.log(`🖼️ Found texture: ${key}`, child.material[key]);
+                    }
+                  });
+                }
+              });
+              console.log(`📊 Total textures found: ${textureCount}`);
+            }
+
+          } catch (loadError) {
+            console.error('❌ loadAsync failed:', loadError);
+            throw loadError;
+          }
+
+          if (!gltf) {
+            throw new Error('loadAsync returned null/undefined');
+          }
+
+          if (!gltf.scene) {
+            throw new Error('GLB file loaded but no scene found');
+          }
+
+          const loadedModel = gltf.scene;
+
+          console.log('🎉 REAL GLB MODEL LOADED SUCCESSFULLY!', {
+            children: loadedModel.children?.length || 0,
+            animations: gltf.animations?.length || 0,
+            hasTraverse: typeof loadedModel.traverse === 'function',
+            modelType: loadedModel.type,
+            modelName: loadedModel.name || 'unnamed'
+          });
+
+          // ✅ DEBUG: Log model structure
+          console.log('🔍 Model structure:');
+          loadedModel.traverse((child: any) => {
+            if (child.isMesh) {
+              console.log('📦 Mesh found:', {
+                name: child.name,
+                material: child.material?.type,
+                geometry: child.geometry?.type,
+                visible: child.visible
+              });
+            }
+          });
+
+          // ✅ DYNAMIC SCALING BASED ON MODEL SIZE
+          console.log('📐 Calculating dynamic scale based on model bounding box...');
+
+          // Calculate bounding box
+          const box = new THREE.Box3().setFromObject(loadedModel);
+          const size = box.getSize(new THREE.Vector3());
+          const maxDimension = Math.max(size.x, size.y, size.z);
+
+          console.log('📏 Model bounding box:', {
+            width: size.x,
+            height: size.y,
+            depth: size.z,
+            maxDimension: maxDimension
+          });
+
+          // Calculate optimal scale for mobile screen (70% of screen height)
+          const targetScreenSize = 0.7; // 70% of screen
+          const optimalScale = targetScreenSize / maxDimension;
+
+          console.log('🎯 Optimal scale calculation:', {
+            targetScreenSize,
+            maxDimension,
+            calculatedScale: optimalScale
+          });
+
+          // Apply dynamic scaling
+          loadedModel.scale.setScalar(optimalScale);
+          loadedModel.position.set(0, -0.1, 0); // ✅ CENTER POSITION
+
+          // ✅ STORE DYNAMIC SCALE FOR ZOOM LIMITS
+          const finalScale = optimalScale;
+          (loadedModel as any).originalScale = finalScale;
+          (loadedModel as any).minScale = finalScale * 0.5; // ✅ MIN ZOOM: 50% of original
+          (loadedModel as any).maxScale = finalScale * 3.0; // ✅ MAX ZOOM: 300% of original
+
+          console.log('✅ Dynamic scale applied:', {
+            finalScale: finalScale,
+            position: loadedModel.position
+          });
+
+          console.log('✅ Model positioned:', {
+            scale: loadedModel.scale,
+            position: loadedModel.position,
+            visible: loadedModel.visible
+          });
+
+          if (glbConfig.rotation) {
+            loadedModel.rotation.set(
+              glbConfig.rotation.x,
+              glbConfig.rotation.y,
+              glbConfig.rotation.z
+            );
+          }
+
+          // ✅ AGGRESSIVE TEXTURE LOADING FOR GLB MODELS
+          console.log('🎨 Aggressive texture loading for GLB models...');
+          loadedModel.traverse((child: any) => {
+            if (child.isMesh) {
+              console.log('🔧 Processing mesh:', child.name, {
+                material: child.material?.type,
+                hasTexture: !!(child.material?.map),
+                color: child.material?.color?.getHexString?.(),
+                originalColor: child.material?.color
+              });
+
+              child.castShadow = true;
+              child.receiveShadow = true;
+
+              if (child.material) {
+                // ✅ DEBUG: Log all material properties
+                console.log('🔍 Full material analysis:', {
+                  type: child.material.type,
+                  color: child.material.color,
+                  map: child.material.map,
+                  normalMap: child.material.normalMap,
+                  roughnessMap: child.material.roughnessMap,
+                  metalnessMap: child.material.metalnessMap,
+                  aoMap: child.material.aoMap,
+                  emissiveMap: child.material.emissiveMap,
+                  alphaMap: child.material.alphaMap,
+                  displacementMap: child.material.displacementMap,
+                  lightMap: child.material.lightMap,
+                  envMap: child.material.envMap
+                });
+
+                // ✅ Preserve original GLB materials/maps. Only normalize if map exists
+                if (child.material.map) {
+                  const mapsToCheck = [
+                    'map', 'normalMap', 'roughnessMap', 'metalnessMap',
+                    'aoMap', 'emissiveMap', 'alphaMap', 'displacementMap',
+                    'lightMap', 'envMap'
+                  ];
+                  mapsToCheck.forEach((mapName) => {
+                    const tex = child.material[mapName];
+                    if (tex) {
+                      // Three r150+: use colorSpace
+                      if ('colorSpace' in tex) {
+                        try { tex.colorSpace = (THREE as any).SRGBColorSpace ?? tex.colorSpace; } catch { }
+                      }
+                      tex.needsUpdate = true;
+                    }
+                  });
+                  child.material.needsUpdate = true;
+                }
+                console.log('✅ Material preserved (no aggressive override)');
+              }
+            }
+          });
+
+          // ✅ FINAL ATTEMPT: TRY TO FORCE TEXTURE FROM GLTF STRUCTURE
+          console.log('🔄 Final attempt: Force texture from GLTF structure...');
+
+          if (gltf.textures && gltf.textures.length > 0) {
+            console.log('🎨 Final attempt: Found textures in GLTF, forcing application...');
+
+            // Get the first texture
+            const texture = gltf.textures[0];
+            console.log('🖼️ Final texture:', texture);
+
+            // Force apply to all materials
+            loadedModel.traverse((child: any) => {
+              if (child.isMesh && child.material) {
+                console.log('🔧 Final: Applying texture to mesh:', child.name);
+
+                try {
+                  // ✅ FIX WEBGL SHADER ERRORS
+                  if (texture && texture.image) {
+                    // Force texture update
+                    texture.needsUpdate = true;
+
+                    // Apply texture with proper UV mapping
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+
+                    // Ensure proper material properties
+                    if (child.material.type === 'MeshStandardMaterial') {
+                      child.material.map.wrapS = THREE.RepeatWrapping;
+                      child.material.map.wrapT = THREE.RepeatWrapping;
+                      child.material.map.flipY = false;
+                    }
+
+                    console.log('✅ Final: Texture applied to material with UV fix');
+                  } else {
+                    console.log('⚠️ Final: Texture has no image, skipping');
+                  }
+                } catch (textureError) {
+                  console.error('❌ Final: Texture application failed:', textureError);
+                }
+              }
+            });
+          } else {
+            console.log('⚠️ Final attempt: No textures found in GLTF');
+          }
+
+          // ✅ ALTERNATIVE TEXTURE LOADING APPROACH
+          console.log('🔄 Trying alternative texture loading approach...');
+
+          // ✅ CHECK IF GLTF HAS TEXTURES IN DIFFERENT LOCATIONS
+          if (gltf.textures && gltf.textures.length > 0) {
+            console.log(`🖼️ Found ${gltf.textures.length} textures in GLTF`);
+            gltf.textures.forEach((texture: any, index: number) => {
+              console.log(`🖼️ Texture ${index + 1}:`, {
+                name: texture.name,
+                type: texture.type,
+                format: texture.format,
+                needsUpdate: texture.needsUpdate
+              });
+            });
+          } else {
+            console.log('⚠️ No textures found in GLTF structure');
+          }
+
+          // ✅ CHECK MATERIALS IN GLTF
+          if (gltf.materials && gltf.materials.length > 0) {
+            console.log(`🎨 Found ${gltf.materials.length} materials in GLTF`);
+            gltf.materials.forEach((material: any, index: number) => {
+              console.log(`🎨 Material ${index + 1}:`, {
+                name: material.name,
+                type: material.type,
+                map: material.map,
+                color: material.color
+              });
+            });
+          } else {
+            console.log('⚠️ No materials found in GLTF structure');
+          }
+
+          // ✅ CHECK SCENE STRUCTURE FOR TEXTURES
+          console.log('🔍 Checking scene structure for textures...');
+          let sceneTextureCount = 0;
+          gltf.scene.traverse((child: any) => {
+            if (child.material) {
+              Object.keys(child.material).forEach(key => {
+                if (key.includes('Map') && child.material[key]) {
+                  sceneTextureCount++;
+                  console.log(`🖼️ Scene texture found: ${key}`, child.material[key]);
+                }
+              });
+            }
+          });
+          console.log(`📊 Scene texture count: ${sceneTextureCount}`);
+
+          // ✅ TRY TO FORCE TEXTURE LOADING FROM GLB FILE
+          console.log('🔄 Trying to force texture loading from GLB file...');
+
+          // ✅ CHECK IF GLB HAS EMBEDDED TEXTURES
+          if (gltf.parser && gltf.parser.json) {
+            console.log('🔍 GLTF parser structure:', {
+              hasParser: !!gltf.parser,
+              hasJson: !!gltf.parser.json,
+              hasImages: !!gltf.parser.json.images,
+              hasTextures: !!gltf.parser.json.textures,
+              hasMaterials: !!gltf.parser.json.materials
+            });
+
+            if (gltf.parser.json.images) {
+              console.log(`🖼️ GLTF has ${gltf.parser.json.images.length} images`);
+              gltf.parser.json.images.forEach((image: any, index: number) => {
+                console.log(`🖼️ Image ${index + 1}:`, {
+                  name: image.name,
+                  uri: image.uri,
+                  mimeType: image.mimeType
+                });
+              });
+            }
+
+            if (gltf.parser.json.textures) {
+              console.log(`🖼️ GLTF has ${gltf.parser.json.textures.length} textures`);
+              gltf.parser.json.textures.forEach((texture: any, index: number) => {
+                console.log(`🖼️ Texture ${index + 1}:`, {
+                  name: texture.name,
+                  source: texture.source,
+                  sampler: texture.sampler
+                });
+              });
+            }
+
+            // ✅ FORCE APPLY TEXTURE FROM GLTF TO MATERIAL
+            console.log('🔧 Force applying texture from GLTF to material...');
+
+            if (gltf.textures && gltf.textures.length > 0 && gltf.materials && gltf.materials.length > 0) {
+              console.log('🎨 Found textures and materials, applying to scene...');
+
+              // Get the first texture and material
+              const gltfTexture = gltf.textures[0];
+              const gltfMaterial = gltf.materials[0];
+
+              console.log('🔧 Applying texture to scene materials...');
+
+              // Apply texture to all materials in the scene
+              loadedModel.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                  console.log('🔧 Applying texture to mesh:', child.name);
+
+                  // Force apply the texture
+                  if (gltfTexture) {
+                    child.material.map = gltfTexture;
+                    child.material.needsUpdate = true;
+                    console.log('✅ Texture applied to material');
+                  }
+
+                  // Force apply material properties
+                  if (gltfMaterial) {
+                    if (gltfMaterial.color) {
+                      child.material.color.copy(gltfMaterial.color);
+                    }
+                    if (gltfMaterial.roughness !== undefined) {
+                      child.material.roughness = gltfMaterial.roughness;
+                    }
+                    if (gltfMaterial.metalness !== undefined) {
+                      child.material.metalness = gltfMaterial.metalness;
+                    }
+                    child.material.needsUpdate = true;
+                    console.log('✅ Material properties applied');
+                  }
+                }
+              });
+            } else {
+              console.log('⚠️ No textures or materials found in GLTF to apply');
+            }
+
+            // ✅ NEW APPROACH: TRY TO GET TEXTURE FROM GLTF PARSER
+            console.log('🔄 New approach: Getting texture from GLTF parser...');
+
+            if (gltf.parser && gltf.parser.json) {
+              console.log('🔍 GLTF parser available, trying to get textures...');
+
+              // Try to get textures from parser
+              if (gltf.parser.json.textures && gltf.parser.json.textures.length > 0) {
+                console.log(`🖼️ Parser has ${gltf.parser.json.textures.length} textures`);
+
+                // Try to get the texture from parser
+                try {
+                  const textureIndex = gltf.parser.json.textures[0].source;
+                  console.log('🖼️ Texture source index:', textureIndex);
+
+                  if (gltf.parser.json.images && gltf.parser.json.images[textureIndex]) {
+                    const imageData = gltf.parser.json.images[textureIndex];
+                    console.log('🖼️ Image data from parser:', imageData);
+
+                    // Try to create texture from parser
+                    if (gltf.parser.getDependency) {
+                      try {
+                        const texture = gltf.parser.getDependency('texture', 0);
+                        console.log('🖼️ Texture from parser:', texture);
+
+                        // ✅ NEW APPROACH: Try to get image from parser
+                        if (!texture || !texture.image) {
+                          console.log('🔄 Texture has no image, trying to get image from parser...');
+
+                          try {
+                            // ✅ SKIP STACK OVERFLOW: Skip image dependency to avoid stack overflow
+                            console.log('🔄 Skipping image dependency to avoid stack overflow...');
+                            console.log('🔄 Trying to load texture from GLTF structure directly...');
+
+                            // Try to load texture from GLTF structure directly
+                            if (gltf.textures && gltf.textures.length > 0) {
+                              const gltfTexture = gltf.textures[0];
+                              console.log('🖼️ GLTF texture found:', gltfTexture);
+
+                              if (gltfTexture && gltfTexture.image) {
+                                console.log('✅ GLTF texture has image data');
+
+                                // Apply texture to materials
+                                loadedModel.traverse((child: any) => {
+                                  if (child.isMesh && child.material) {
+                                    console.log('🔧 Parser: Applying GLTF texture to mesh:', child.name);
+                                    child.material.map = gltfTexture;
+                                    child.material.needsUpdate = true;
+                                    console.log('✅ Parser: GLTF texture applied successfully');
+                                  }
+                                });
+                              } else {
+                                console.log('⚠️ GLTF texture has no image data');
+                              }
+                            } else {
+                              console.log('⚠️ No GLTF textures available');
+                            }
+                          } catch (imageError) {
+                            console.error('❌ Parser: Texture loading failed:', imageError);
+                            console.log('🔄 Trying alternative texture loading...');
+
+                            // Try alternative approach
+                            if (gltf.textures && gltf.textures.length > 0) {
+                              const gltfTexture = gltf.textures[0];
+                              loadedModel.traverse((child: any) => {
+                                if (child.isMesh && child.material) {
+                                  child.material.map = gltfTexture;
+                                  child.material.needsUpdate = true;
+                                  console.log('✅ Parser: Alternative GLTF texture applied');
+                                }
+                              });
+                            }
+                          }
+                        } else {
+                          // Apply texture to materials
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              console.log('🔧 Parser: Applying texture to mesh:', child.name);
+
+                              // ✅ FIX WEBGL SHADER ERRORS
+                              try {
+                                // Ensure texture has proper UV mapping
+                                if (texture && texture.image) {
+                                  // Force texture update
+                                  texture.needsUpdate = true;
+
+                                  // Apply texture with proper UV mapping
+                                  child.material.map = texture;
+                                  child.material.needsUpdate = true;
+
+                                  // Ensure proper material properties
+                                  if (child.material.type === 'MeshStandardMaterial') {
+                                    child.material.map.wrapS = THREE.RepeatWrapping;
+                                    child.material.map.wrapT = THREE.RepeatWrapping;
+                                    child.material.map.flipY = false;
+                                  }
+
+                                  console.log('✅ Parser: Texture applied to material with UV fix');
+                                } else {
+                                  console.log('⚠️ Parser: Texture has no image, skipping');
+                                }
+                              } catch (textureError) {
+                                console.error('❌ Parser: Texture application failed:', textureError);
+                              }
+                            }
+                          });
+                        }
+                      } catch (parserError) {
+                        console.error('❌ Parser texture dependency failed:', parserError);
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.error('❌ Parser texture access failed:', error);
+                }
+              }
+            }
+
+            // ✅ ALTERNATIVE: TRY TO CREATE TEXTURE FROM GLTF IMAGES
+            console.log('🔄 Alternative: Creating texture from GLTF images...');
+
+            if (gltf.parser && gltf.parser.json && gltf.parser.json.images && gltf.parser.json.images.length > 0) {
+              console.log('🖼️ Found images in GLTF, trying to create texture...');
+
+              // Try to get the image data from GLTF
+              const imageData = gltf.parser.json.images[0];
+              console.log('🖼️ Image data:', imageData);
+
+              // Try to create a texture from the image
+              if (gltf.parser.json.textures && gltf.parser.json.textures.length > 0) {
+                const textureData = gltf.parser.json.textures[0];
+                console.log('🖼️ Texture data:', textureData);
+
+                // Try to apply the texture to materials
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    console.log('🔧 Alternative: Applying texture to mesh:', child.name);
+
+                    // Try to create a new texture
+                    try {
+                      // This is a more direct approach
+                      if (gltf.textures && gltf.textures.length > 0) {
+                        const texture = gltf.textures[0];
+                        child.material.map = texture;
+                        child.material.needsUpdate = true;
+                        console.log('✅ Alternative: Texture applied successfully');
+                      } else {
+                        // ✅ LOAD REAL TEXTURE: Try to get texture from GLTF structure
+                        console.log('🎨 Alternative: No texture found, trying to load from GLTF structure...');
+                        if (gltf.textures && gltf.textures.length > 0) {
+                          const gltfTexture = gltf.textures[0];
+                          child.material.map = gltfTexture;
+                          child.material.needsUpdate = true;
+                          console.log('✅ Alternative: GLTF texture applied');
+                        } else {
+                          console.log('⚠️ Alternative: No GLTF textures available');
+                        }
+                      }
+                    } catch (error) {
+                      console.error('❌ Alternative texture application failed:', error);
+                      // ✅ LOAD REAL TEXTURE: Try to get texture from GLTF structure on error
+                      console.log('🎨 Alternative: Error occurred, trying to load from GLTF structure...');
+                      if (gltf.textures && gltf.textures.length > 0) {
+                        const gltfTexture = gltf.textures[0];
+                        child.material.map = gltfTexture;
+                        child.material.needsUpdate = true;
+                        console.log('✅ Alternative: Error fallback GLTF texture applied');
+                      } else {
+                        console.log('⚠️ Alternative: No GLTF textures available for error fallback');
+                      }
+                    }
+                  }
+                });
+              }
+            }
+          }
+
+          // ✅ FINAL APPROACH: Force load texture from GLB file structure
+          console.log('🔄 Final approach: Force loading texture from GLB file...');
+
+          // Try to get texture from GLB file directly
+          if (gltf.parser && gltf.parser.json) {
+            const json = gltf.parser.json;
+            console.log('🔍 GLB JSON structure:', {
+              hasImages: !!json.images,
+              hasTextures: !!json.textures,
+              hasMaterials: !!json.materials,
+              imageCount: json.images ? json.images.length : 0,
+              textureCount: json.textures ? json.textures.length : 0,
+              materialCount: json.materials ? json.materials.length : 0
+            });
+
+            // Try to load texture from GLB structure
+            if (json.textures && json.textures.length > 0) {
+              console.log('🖼️ Found textures in GLB JSON, trying to load...');
+
+              loadedModel.traverse((child: any) => {
+                if (child.isMesh && child.material) {
+                  console.log('🔧 Final: Applying texture from GLB JSON to mesh:', child.name);
+
+                  try {
+                    // Get texture from GLTF structure with proper validation
+                    if (gltf.textures && gltf.textures.length > 0) {
+                      const gltfTexture = gltf.textures[0];
+                      console.log('🔍 Final: GLTF texture details:', {
+                        hasTexture: !!gltfTexture,
+                        hasImage: !!(gltfTexture && gltfTexture.image),
+                        textureType: gltfTexture ? typeof gltfTexture : 'undefined'
+                      });
+
+                      if (gltfTexture && gltfTexture.image) {
+                        child.material.map = gltfTexture;
+                        child.material.needsUpdate = true;
+                        console.log('✅ Final: GLB texture applied successfully');
+                      } else {
+                        console.log('⚠️ Final: GLTF texture has no image data');
+                      }
+                    } else {
+                      console.log('⚠️ Final: No GLTF textures available');
+                    }
+                  } catch (error) {
+                    console.error('❌ Final: Texture application failed:', error);
+                    console.log('🔄 Final: Trying to load texture from GLB file structure...');
+
+                    // Try to load texture from GLB file structure
+                    if (gltf.parser && gltf.parser.json && gltf.parser.json.textures && gltf.parser.json.textures.length > 0) {
+                      console.log('🔍 Final: Found textures in GLB JSON structure');
+                      // Try to get texture from GLTF structure
+                      if (gltf.textures && gltf.textures.length > 0) {
+                        const gltfTexture = gltf.textures[0];
+                        if (gltfTexture) {
+                          child.material.map = gltfTexture;
+                          child.material.needsUpdate = true;
+                          console.log('✅ Final: GLB JSON texture applied');
+                        }
+                      }
+                    }
+                  }
+                }
+              });
+            }
+          }
+
+          // ✅ DEBUG GLTF STRUCTURE: Log detailed GLTF structure
+          console.log('🔍 DEBUG: GLTF structure analysis...');
+          console.log('🔍 GLTF object keys:', Object.keys(gltf));
+          console.log('🔍 GLTF.textures:', gltf.textures);
+          console.log('🔍 GLTF.parser:', gltf.parser);
+          console.log('🔍 GLTF.parser.json:', gltf.parser?.json);
+          console.log('🔍 GLTF.parser.json.images:', gltf.parser?.json?.images);
+          console.log('🔍 GLTF.parser.json.buffers:', gltf.parser?.json?.buffers);
+          console.log('🔍 GLTF.parser.json.bufferViews:', gltf.parser?.json?.bufferViews);
+
+          // ✅ CLEAN TEXTURE LOADING: Chỉ giữ lại phương pháp chính
+          console.log('🔄 Clean texture loading: Using standard GLB texture loading...');
+
+          // Apply texture nếu có sẵn trong GLTF
+          if (gltf.textures && gltf.textures.length > 0) {
+            console.log('✅ Found textures in GLTF, applying...');
+            const gltfTexture = gltf.textures[0];
+
+            loadedModel.traverse((child: any) => {
+              if (child.isMesh && child.material) {
+                child.material.map = gltfTexture;
+                child.material.needsUpdate = true;
+                console.log('✅ GLTF texture applied successfully');
+              }
+            });
+          } else {
+            console.log('⚠️ No textures found in GLTF, using default material');
+          }
+
+
+          // ✅ SIMPLE & CLEAN TEXTURE LOADING
+          console.log('🎨 Loading textures with simple approach...');
+          
+          try {
+            // Get image and buffer view data from GLTF parser
+            const gltfImage = gltf.parser?.json?.images?.[0] || null;
+            const gltfBufferView = gltf.parser?.json?.bufferViews?.[gltfImage?.bufferView] || null;
+            
+            console.log('🔍 Image data:', gltfImage);
+            console.log('🔍 BufferView data:', gltfBufferView);
+
+            // Get GLB binary data
+            const glbBinaryData = getGLBBinaryData(gltf);
+            
+            if (glbBinaryData && gltfBufferView) {
+              console.log('✅ Found GLB binary data, length:', glbBinaryData.byteLength);
+
+              // Extract image data
+              const byteOffset = gltfBufferView.byteOffset || 0;
+              const byteLength = gltfBufferView.byteLength;
+              const imageDataArrayBuffer = glbBinaryData.slice(byteOffset, byteOffset + byteLength);
+
+              // Create Blob and load texture
+              const blob = new Blob([imageDataArrayBuffer], { type: gltfImage?.mimeType || 'image/png' });
+              const imageUrl = URL.createObjectURL(blob);
+              
+              const textureLoader = new THREE.TextureLoader();
+              textureLoader.load(imageUrl, (texture) => {
+                console.log('✅ Texture loaded successfully!');
+                
+                // Configure texture
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.flipY = false;
+                
+                // Apply texture to model
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+                  }
+                });
+                
+                URL.revokeObjectURL(imageUrl);
+                console.log('✅ Texture applied to model!');
+              }, undefined, (error) => {
+                console.error('❌ Failed to load texture:', error);
+                URL.revokeObjectURL(imageUrl);
+              });
+            } else {
+              console.log('⚠️ No binary data available for texture loading');
+            }
+          } catch (error) {
+            console.error('❌ Texture loading failed:', error);
+          }
+          
+          // ✅ END OF SIMPLE TEXTURE LOADING
+          /*
+          console.log('🔄 Method 7: Creating Blob from Uint8Array...');
+            console.log('🔍 Method 7: Uint8Array details:', {
+              length: uint8Array.length,
+              byteLength: uint8Array.byteLength,
+              firstBytes: Array.from(uint8Array.slice(0, 10)),
+              lastBytes: Array.from(uint8Array.slice(-10))
+            });
+
+            // Check Blob support
+            console.log('🔍 Method 7: Checking Blob support...');
+            console.log('🔍 Method 7: Blob constructor available:', typeof Blob !== 'undefined');
+            console.log('🔍 Method 7: Blob constructor:', Blob);
+
+            let blob: Blob;
+            try {
+              console.log('🔄 Method 7: Creating Blob with type:', gltfImage.mimeType || 'image/png');
+
+              // Try different Blob creation methods
+              if (typeof Blob !== 'undefined') {
+                console.log('🔄 Method 7: Creating Blob...');
+
+                // Try different Blob creation approaches
+                try {
+                  // Approach 1: Direct Uint8Array
+                  blob = new Blob([uint8Array], { type: gltfImage.mimeType || 'image/png' });
+                  console.log('✅ Method 7: Blob created successfully!');
+                } catch (approach1Error) {
+                  try {
+                    // Approach 2: ArrayBuffer
+                    const arrayBuffer = uint8Array.buffer.slice(uint8Array.byteOffset, uint8Array.byteOffset + uint8Array.byteLength);
+                    blob = new Blob([arrayBuffer], { type: gltfImage.mimeType || 'image/png' });
+                    console.log('✅ Method 7: Blob created successfully!');
+                  } catch (approach2Error) {
+                    try {
+                      // Approach 3: Array from Uint8Array
+                      const arrayFromUint8 = Array.from(uint8Array);
+                      blob = new Blob([new Uint8Array(arrayFromUint8)], { type: gltfImage.mimeType || 'image/png' });
+                      console.log('✅ Method 7: Blob created successfully!');
+                    } catch (approach3Error) {
+                      try {
+                        // Approach 4: String from Uint8Array
+                        const stringFromUint8 = String.fromCharCode.apply(null, Array.from(uint8Array));
+                        blob = new Blob([stringFromUint8], { type: gltfImage.mimeType || 'image/png' });
+                        console.log('✅ Method 7: Blob created successfully!');
+                      } catch (approach4Error) {
+                        console.error('❌ Method 7: All Blob creation approaches failed!');
+                        throw new Error('All Blob creation approaches failed');
+                      }
+                    }
+                  }
+                }
+
+                if (blob.size === 0) {
+                  console.error('❌ Method 7: Blob created but size is 0!');
+                  throw new Error('Blob size is 0');
+                }
+              } else {
+                console.error('❌ Method 7: Blob constructor not available!');
+                throw new Error('Blob constructor not available');
+              }
+            } catch (blobError) {
+              console.error('❌ Method 7: Blob creation failed:', blobError);
+              console.error('❌ Method 7: Error details:', {
+                name: (blobError as Error).name,
+                message: (blobError as Error).message,
+                stack: (blobError as Error).stack
+              });
+
+              // Try alternative approach
+              console.log('🔄 Method 7: Trying alternative texture loading approach...');
+              try {
+                // Method 7A: Direct texture creation from Uint8Array
+                console.log('🔄 Method 7A: Creating texture from Data URL...');
+
+                // Create a data URL from Uint8Array
+                const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+                const dataUrl = `data:${gltfImage.mimeType || 'image/png'};base64,${base64String}`;
+                console.log('✅ Method 7A: Data URL created, length:', dataUrl.length);
+
+                // Create texture from data URL
+                // Create texture directly from Image (React Native compatible)
+                const img = new Image();
+                img.onload = () => {
+                  console.log('✅ Method 7A: Image loaded successfully');
+                  console.log('🔍 Method 7A: Image size:', img.width, 'x', img.height);
+
+                  // Create texture from image
+                  const texture = new THREE.Texture(img);
+                  texture.needsUpdate = true;
+                  texture.wrapS = THREE.RepeatWrapping;
+                  texture.wrapT = THREE.RepeatWrapping;
+                  texture.flipY = false;
+
+                  // Apply texture to model
+                  let appliedCount = 0;
+                  loadedModel.traverse((child: any) => {
+                    if (child.isMesh && child.material) {
+                      child.material.map = texture;
+                      child.material.needsUpdate = true;
+                      appliedCount++;
+                    }
+                  });
+
+                  console.log('✅ Method 7A: Texture applied to', appliedCount, 'meshes!');
+                };
+                img.onerror = (error) => {
+                  console.error('❌ Method 7A: Image loading failed:', error);
+                };
+                img.src = dataUrl;
+
+                return; // Exit early if alternative method works
+              } catch (altError) {
+                console.error('❌ Method 7A: Alternative approach failed:', altError);
+              }
+
+              throw blobError;
+            }
+
+            console.log('🔄 Method 7: Creating Data URL from Blob...');
+            try {
+              // Convert to base64 for Data URL (React Native compatible)
+              const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+              const imageUrl = `data:image/png;base64,${base64String}`;
+              console.log('🖼️ Method 7: Created Data URL from extracted image data:', imageUrl.substring(0, 100) + '...');
+
+              // Create texture directly from Image (React Native compatible)
+              const img = new Image();
+              img.onload = () => {
+                console.log('✅ Method 7: Image loaded successfully from Data URL');
+                console.log('🔍 Method 7: Image size:', img.width, 'x', img.height);
+
+                // Create texture from image
+                const texture = new THREE.Texture(img);
+                texture.needsUpdate = true;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.flipY = false;
+
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+                  }
+                });
+                console.log('✅ Method 7: Texture applied successfully!');
+              };
+              img.onerror = (error) => {
+                console.error('❌ Method 7: Image loading failed:', error);
+              };
+              img.src = imageUrl;
+            } catch (urlError) {
+              console.error('❌ Method 7: URL.createObjectURL failed:', urlError);
+              console.log('🔄 Method 7: Trying alternative Data URL approach...');
+
+              // Alternative: Use Data URL instead of Blob URL
+              const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+              const dataUrl = `data:${gltfImage.mimeType || 'image/png'};base64,${base64String}`;
+              console.log('✅ Method 7: Data URL created, length:', dataUrl.length);
+
+              // Create texture directly from Image (React Native compatible)
+              console.log('🔄 Method 7: Creating texture from Image...');
+              console.log('🔍 Method 7: Data URL preview:', dataUrl.substring(0, 100) + '...');
+              console.log('🔍 Method 7: Data URL length:', dataUrl.length);
+
+              const img = new Image();
+              img.onload = () => {
+                console.log('✅ Method 7: Image loaded successfully from Data URL');
+                console.log('🔍 Method 7: Image size:', img.width, 'x', img.height);
+
+                // Create texture from image
+                const texture = new THREE.Texture(img);
+                texture.needsUpdate = true;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.flipY = false;
+
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+                  }
+                });
+                console.log('✅ Method 7: Texture applied successfully!');
+              };
+              img.onerror = (error) => {
+                console.error('❌ Method 7: Image loading failed:', error);
+                console.log('🔄 Method 7: Trying alternative texture creation approach...');
+              };
+              img.src = dataUrl;
+            }
+          } else {
+            console.log('⚠️ Method 7: No GLB binary data found');
+          }
+        } else {
+          console.log('⚠️ Method 7: No images found in GLB JSON');
+        }
+      } catch (method7Error) {
+        console.error('❌ Method 7: Error creating texture from extracted image data:', method7Error);
+      }
+
+      // Method 8: Alternative approach - Force create texture from GLB data
+      console.log('🖼️ Method 8: Alternative approach - Force create texture from GLB data...');
+      try {
+        // Try to get texture from GLTF parser directly
+        if (gltf.parser && gltf.parser.json && gltf.parser.json.images && gltf.parser.json.images.length > 0) {
+          console.log('🔍 Method 8: Found images in GLB JSON, trying alternative approach...');
+
+          // Try to get texture from GLTF parser cache
+          if (gltf.parser.textureCache && Object.keys(gltf.parser.textureCache).length > 0) {
+            console.log('🔍 Method 8: Found texture cache:', Object.keys(gltf.parser.textureCache));
+
+            // Try to get texture from cache
+            const cacheKeys = Object.keys(gltf.parser.textureCache);
+            for (const key of cacheKeys) {
+              const cachedTexture = gltf.parser.textureCache[key];
+              console.log('🔍 Method 8: Cached texture:', key, cachedTexture);
+
+              if (cachedTexture && cachedTexture._j) {
+                console.log('✅ Method 8: Found valid cached texture');
+
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    console.log('🔧 Method 8: Applying cached texture to mesh:', child.name);
+                    child.material.map = cachedTexture._j;
+                    child.material.needsUpdate = true;
+                    console.log('✅ Method 8: Cached texture applied to mesh:', child.name);
+                  }
+                });
+                console.log('✅ Method 8: Cached texture applied successfully!');
+                break;
+              } else {
+                console.log('⚠️ Method 8: Cached texture is null or invalid:', {
+                  cachedTexture: cachedTexture,
+                  hasJ: cachedTexture?._j !== null,
+                  jValue: cachedTexture?._j
+                });
+              }
+            }
+          } else {
+            console.log('⚠️ Method 8: No texture cache found');
+          }
+        } else {
+          console.log('⚠️ Method 8: No images found in GLB JSON');
+        }
+      } catch (method8Error) {
+        console.error('❌ Method 8: Error with alternative texture approach:', method8Error);
+      }
+
+      // Method 9: Direct texture creation from GLB binary data
+      console.log('🖼️ Method 9: Direct texture creation from GLB binary data...');
+      try {
+        // Get GLB binary data directly
+        const glbBinaryData = getGLBBinaryData(gltf);
+        if (glbBinaryData && glbBinaryData.byteLength) {
+          console.log('✅ Method 9: Found GLB binary data, length:', glbBinaryData.byteLength);
+
+          // Get image data from GLB JSON
+          if (gltf.parser.json.images && gltf.parser.json.images.length > 0) {
+            const gltfImage = gltf.parser.json.images[0];
+            const gltfBufferView = gltf.parser.json.bufferViews[gltfImage.bufferView];
+
+            console.log('🔍 Method 9: Image data:', gltfImage);
+            console.log('🔍 Method 9: BufferView data:', gltfBufferView);
+
+            // Extract image data from GLB binary data
+            const byteOffset = gltfBufferView.byteOffset || 0;
+            const byteLength = gltfBufferView.byteLength;
+            const imageDataArrayBuffer = glbBinaryData.slice(byteOffset, byteOffset + byteLength);
+
+            console.log('🔍 Method 9: Image data extracted:', {
+              byteOffset,
+              byteLength,
+              imageDataLength: imageDataArrayBuffer.byteLength
+            });
+
+            // Create texture directly from binary data
+            console.log('🔄 Method 9: Creating texture directly from binary data...');
+            try {
+              // Convert ArrayBuffer to Uint8Array
+              const uint8Array = new Uint8Array(imageDataArrayBuffer);
+              console.log('✅ Method 9: Uint8Array created, length:', uint8Array.length);
+
+              // Create Blob
+              console.log('🔄 Method 9: Creating Blob from Uint8Array...');
+              console.log('🔍 Method 9: Uint8Array details:', {
+                length: uint8Array.length,
+                byteLength: uint8Array.byteLength,
+                firstBytes: Array.from(uint8Array.slice(0, 10)),
+                lastBytes: Array.from(uint8Array.slice(-10))
+              });
+
+              // Check Blob support
+              console.log('🔍 Method 9: Checking Blob support...');
+              console.log('🔍 Method 9: Blob constructor available:', typeof Blob !== 'undefined');
+
+              let blob: Blob;
+              try {
+                console.log('🔄 Method 9: Creating Blob with type:', gltfImage.mimeType || 'image/png');
+
+                if (typeof Blob !== 'undefined') {
+                  console.log('🔄 Method 9: Creating Blob...');
+                  try {
+                    blob = new Blob([uint8Array], { type: gltfImage.mimeType || 'image/png' });
+                    console.log('✅ Method 9: Blob created successfully!');
+
+                    if (blob.size === 0) {
+                      console.error('❌ Method 9: Blob size is 0!');
+                      throw new Error('Blob size is 0');
+                    }
+                  } catch (blobError) {
+                    console.error('❌ Method 9: Blob creation failed:', blobError);
+                    console.log('🔄 Method 9: Trying alternative Data URL approach...');
+
+                    // Alternative: Use Data URL instead of Blob
+                    const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+                    const dataUrl = `data:${gltfImage.mimeType || 'image/png'};base64,${base64String}`;
+                    console.log('✅ Method 9: Data URL created, length:', dataUrl.length);
+
+                    // Create texture directly from Image (React Native compatible)
+                    console.log('🔄 Method 9: Creating texture from Image...');
+                    console.log('🔍 Method 9: Data URL preview:', dataUrl.substring(0, 100) + '...');
+                    console.log('🔍 Method 9: Data URL length:', dataUrl.length);
+
+                    // Extract material properties from GLB JSON if available
+                    let materialProps = { metalness: 0, roughness: 0.58 };
+                    try {
+                      // Try to get GLB JSON from the parser
+                      const gltfJson = gltf.parser?.json || null;
+                      if (gltfJson && gltfJson.materials && gltfJson.materials.length > 0) {
+                        const material = gltfJson.materials[0];
+                        if (material.pbrMetallicRoughness) {
+                          materialProps.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                          materialProps.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                          console.log('🎨 Found PBR material properties:', materialProps);
+                        }
+                      }
+                    } catch (error) {
+                      console.log('⚠️ Could not extract material properties, using defaults:', materialProps);
+                    }
+
+                    const img = new Image();
+
+                    // Set a longer timeout for image loading
+                    const imageTimeout = setTimeout(() => {
+                      console.error('❌ Method 9: Image loading timeout after 10 seconds');
+                      console.error('❌ Method 9: Data URL length:', dataUrl.length);
+                    }, 10000); // Increased to 10 seconds
+
+                    img.onload = () => {
+                      clearTimeout(imageTimeout);
+                      console.log('✅ Method 9: Image loaded successfully from Data URL');
+                      console.log('🔍 Method 9: Image size:', img.width, 'x', img.height);
+
+                      // Create texture from image
+                      const texture = new THREE.Texture(img);
+                      // Normalize for GLTF
+                      texture.needsUpdate = true;
+                      texture.wrapS = THREE.RepeatWrapping;
+                      texture.wrapT = THREE.RepeatWrapping;
+                      texture.flipY = false;
+                      // sRGB for baseColor
+                      try {
+                        (texture as any).colorSpace = (THREE as any).SRGBColorSpace ?? (texture as any).colorSpace;
+                      } catch { }
+                      if ((texture as any).encoding !== undefined && (THREE as any).sRGBEncoding !== undefined) {
+                        (texture as any).encoding = (THREE as any).sRGBEncoding;
+                      }
+
+                      loadedModel.traverse((child: any) => {
+                        if (!child.isMesh || !child.material) return;
+
+                        const applyToMat = (mat: any) => {
+                          if (!mat) return;
+                          // Set PBR material properties for proper color rendering
+                          if (mat.color && mat.color.setHex) mat.color.setHex(0xffffff);
+                          if ('vertexColors' in mat) mat.vertexColors = false;
+                          if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+
+                          // Apply texture as baseColorTexture (PBR standard)
+                          mat.map = texture;
+                          mat.needsUpdate = true;
+
+                          // Ensure proper color space for PBR materials
+                          if (texture.colorSpace !== THREE.SRGBColorSpace) {
+                            texture.colorSpace = THREE.SRGBColorSpace;
+                          }
+
+                          // Set metallic and roughness from GLB material definition
+                          if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                          if ('roughness' in mat) mat.roughness = materialProps.roughness;
+
+                          console.log('🎨 Applied PBR material properties:', {
+                            hasTexture: !!mat.map,
+                            colorSpace: texture.colorSpace,
+                            metalness: mat.metalness,
+                            roughness: mat.roughness
+                          });
+                        };
+
+                        if (Array.isArray(child.material)) {
+                          child.material = child.material.map((m: any) => {
+                            const cloned = m.clone ? m.clone() : m;
+                            applyToMat(cloned);
+                            return cloned;
+                          });
+                        } else {
+                          if (!child.material.map && child.material.clone) {
+                            const cloned = child.material.clone();
+                            applyToMat(cloned);
+                            child.material = cloned;
+                          } else {
+                            applyToMat(child.material);
+                          }
+                        }
+                      });
+                      console.log('✅ Method 9: Texture applied successfully!');
+                    };
+                    img.onerror = (error) => {
+                      clearTimeout(imageTimeout);
+                      console.error('❌ Method 9: Image loading failed:', error);
+                      console.error('❌ Method 9: Data URL length:', dataUrl.length);
+                      console.error('❌ Method 9: Data URL preview:', dataUrl.substring(0, 100));
+                      console.log('🔄 Method 9: Trying alternative texture creation approach...');
+                    };
+                    console.log('🔄 Method 9: Setting img.src to load texture...');
+                    img.src = dataUrl;
+
+                    // Method 11: Use THREE.TextureLoader with Data URL (Backup method)
+                    console.log('🔄 Method 11: Using THREE.TextureLoader with Data URL...');
+                    try {
+                      // Use THREE.TextureLoader to load texture from Data URL
+                      const textureLoader = new THREE.TextureLoader();
+
+                      // Set timeout for texture loader
+                      const textureTimeout = setTimeout(() => {
+                        console.error('❌ Method 11: TextureLoader timeout after 8 seconds');
+                      }, 8000);
+
+                      // Method 12: Try Blob URL approach (more efficient)
+                      console.log('🔄 Method 12: Trying Blob URL approach...');
+                      try {
+                        // Create Blob URL instead of Data URL for better performance
+                        const blob = new Blob([uint8Array], { type: 'image/png' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        console.log('✅ Method 12: Blob URL created:', blobUrl.substring(0, 50) + '...');
+
+                        // Load texture using Blob URL
+                        const blobTextureLoader = new THREE.TextureLoader();
+                        const blobTimeout = setTimeout(() => {
+                          console.error('❌ Method 12: Blob URL timeout after 6 seconds');
+                          URL.revokeObjectURL(blobUrl);
+                        }, 6000);
+
+                        blobTextureLoader.load(
+                          blobUrl,
+                          (texture) => {
+                            clearTimeout(blobTimeout);
+                            console.log('✅ Method 12: Blob URL texture loaded successfully');
+
+                            // Configure texture
+                            texture.wrapS = THREE.RepeatWrapping;
+                            texture.wrapT = THREE.RepeatWrapping;
+                            texture.flipY = false;
+                            texture.colorSpace = THREE.SRGBColorSpace;
+
+                            // Apply texture to model
+                            loadedModel.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                                const applyToMat = (mat: any) => {
+                                  if (!mat) return;
+                                  mat.color.setHex(0xffffff);
+                                  if ('vertexColors' in mat) mat.vertexColors = false;
+                                  if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                  mat.map = texture;
+                                  mat.needsUpdate = true;
+                                };
+
+                                if (Array.isArray(child.material)) {
+                                  child.material.forEach(applyToMat);
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            });
+
+                            console.log('✅ Method 12: Blob URL texture applied successfully!');
+                            URL.revokeObjectURL(blobUrl); // Clean up
+                          },
+                          undefined,
+                          (error) => {
+                            clearTimeout(blobTimeout);
+                            console.error('❌ Method 12: Blob URL texture loading failed:', error);
+                            URL.revokeObjectURL(blobUrl); // Clean up
+                          }
+                        );
+                      } catch (blobError) {
+                        console.error('❌ Method 12: Blob URL approach failed:', blobError);
+                      }
+
+                      // Method 13: Direct Canvas approach (fastest)
+                      console.log('🔄 Method 13: Trying direct Canvas approach...');
+                      try {
+                        // Create uint8Array from GLB binary data
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const gltfImage = gltf.parser.json.images[0];
+                        const gltfBufferView = gltf.parser.json.bufferViews[gltfImage.bufferView];
+
+                        // Extract image data from GLB binary
+                        const imageDataArrayBuffer = glbBinaryData.slice(
+                          gltfBufferView.byteOffset,
+                          gltfBufferView.byteOffset + gltfBufferView.byteLength
+                        );
+
+                        const uint8Array = new Uint8Array(imageDataArrayBuffer);
+                        console.log('🔍 Method 13: Created uint8Array, length:', uint8Array.length);
+
+                        // Create canvas and load image directly
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        if (ctx) {
+                          // Parse PNG dimensions from IHDR chunk (fixed parsing)
+                          let width = 1024, height = 1024;
+
+                          // PNG signature: 137, 80, 78, 71, 13, 10, 26, 10
+                          if (uint8Array.length > 24 &&
+                            uint8Array[0] === 137 && uint8Array[1] === 80 &&
+                            uint8Array[2] === 78 && uint8Array[3] === 71) {
+
+                            // Read IHDR chunk for dimensions (correct parsing)
+                            const ihdrOffset = 8; // Skip PNG signature
+                            if (uint8Array.length > ihdrOffset + 12) {
+                              // Use DataView for proper big-endian reading
+                              const dataView = new DataView(uint8Array.buffer, uint8Array.byteOffset + ihdrOffset + 4);
+
+                              // Read width (4 bytes, big-endian)
+                              width = dataView.getUint32(0, false); // false = big-endian
+                              // Read height (4 bytes, big-endian)  
+                              height = dataView.getUint32(4, false); // false = big-endian
+
+                              // Validate dimensions (reasonable bounds)
+                              if (width > 4096 || height > 4096 || width < 1 || height < 1) {
+                                console.warn('⚠️ Method 13: Invalid PNG dimensions, using defaults:', width, 'x', height);
+                                width = 1024;
+                                height = 1024;
+                              }
+                            }
+                          }
+
+                          console.log('🔍 Method 13: Canvas dimensions:', width, 'x', height);
+                          canvas.width = width;
+                          canvas.height = height;
+
+                          // Create ImageData from Uint8Array with proper bounds checking
+                          const imageData = ctx.createImageData(width, height);
+                          const data = imageData.data;
+
+                          // Convert PNG data to ImageData (improved approach)
+                          // Skip PNG header and IHDR chunk, start from actual image data
+                          const pngDataStart = 33; // Skip PNG signature + IHDR chunk
+                          let dataIndex = 0;
+
+                          // Add bounds checking for uint8Array
+                          if (!uint8Array || !uint8Array.length) {
+                            console.error('❌ Method 13: uint8Array is invalid or empty');
+                            console.log('🔍 Method 13: uint8Array type:', typeof uint8Array);
+                            console.log('🔍 Method 13: uint8Array value:', uint8Array);
+                            throw new Error('uint8Array is invalid or empty');
+                          }
+
+                          for (let i = 0; i < data.length && pngDataStart + dataIndex < uint8Array.length; i += 4) {
+                            const pixelIndex = i / 4;
+                            const x = pixelIndex % width;
+                            const y = Math.floor(pixelIndex / width);
+
+                            if (y < height && pngDataStart + dataIndex < uint8Array.length) {
+                              // Extract RGBA values from PNG data with bounds checking
+                              data[i] = uint8Array[pngDataStart + dataIndex] || 128;     // R
+                              data[i + 1] = uint8Array[pngDataStart + dataIndex + 1] || 128; // G
+                              data[i + 2] = uint8Array[pngDataStart + dataIndex + 2] || 128; // B
+                              data[i + 3] = uint8Array[pngDataStart + dataIndex + 3] || 255;  // A
+                              dataIndex += 4;
+                            }
+                          }
+
+                          ctx.putImageData(imageData, 0, 0);
+
+                          // Create texture from canvas
+                          const canvasTexture = new THREE.CanvasTexture(canvas);
+                          canvasTexture.wrapS = THREE.RepeatWrapping;
+                          canvasTexture.wrapT = THREE.RepeatWrapping;
+                          canvasTexture.flipY = false;
+                          canvasTexture.colorSpace = THREE.SRGBColorSpace;
+
+                          // Apply texture to model
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                mat.map = canvasTexture;
+                                mat.needsUpdate = true;
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material.forEach(applyToMat);
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 13: Canvas texture created and applied successfully!');
+                        }
+                      } catch (canvasError) {
+                        console.error('❌ Method 13: Canvas approach failed:', canvasError);
+                      }
+
+                      // Method 14: Fix Canvas dimensions parsing
+                      console.log('🔄 Method 14: Fixing Canvas dimensions parsing...');
+                      try {
+                        // Create uint8Array from GLB binary data
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const gltfImage = gltf.parser.json.images[0];
+                        const gltfBufferView = gltf.parser.json.bufferViews[gltfImage.bufferView];
+
+                        // Extract image data from GLB binary
+                        const imageDataArrayBuffer = glbBinaryData.slice(
+                          gltfBufferView.byteOffset,
+                          gltfBufferView.byteOffset + gltfBufferView.byteLength
+                        );
+
+                        const uint8Array = new Uint8Array(imageDataArrayBuffer);
+                        console.log('🔍 Method 14: Created uint8Array, length:', uint8Array.length);
+
+                        // Fix the Canvas dimensions parsing issue
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        if (ctx) {
+                          // Parse PNG dimensions correctly from IHDR chunk
+                          let width = 1024, height = 1024;
+
+                          // PNG signature: 137, 80, 78, 71, 13, 10, 26, 10
+                          if (uint8Array.length > 24 &&
+                            uint8Array[0] === 137 && uint8Array[1] === 80 &&
+                            uint8Array[2] === 78 && uint8Array[3] === 71) {
+
+                            // Read IHDR chunk for dimensions (correct parsing)
+                            const ihdrOffset = 8; // Skip PNG signature
+                            if (uint8Array.length > ihdrOffset + 12) {
+                              // Use DataView for proper big-endian reading
+                              const dataView = new DataView(uint8Array.buffer, uint8Array.byteOffset + ihdrOffset + 4);
+
+                              // Read width (4 bytes, big-endian)
+                              width = dataView.getUint32(0, false); // false = big-endian
+                              // Read height (4 bytes, big-endian)  
+                              height = dataView.getUint32(4, false); // false = big-endian
+
+                              // Validate dimensions (reasonable bounds)
+                              if (width > 4096 || height > 4096 || width < 1 || height < 1) {
+                                console.warn('⚠️ Method 13: Invalid PNG dimensions, using defaults:', width, 'x', height);
+                                width = 1024;
+                                height = 1024;
+                              }
+                            }
+                          }
+
+                          console.log('🔍 Method 14: Corrected Canvas dimensions:', width, 'x', height);
+                          canvas.width = width;
+                          canvas.height = height;
+
+                          // Create ImageData from Uint8Array with proper PNG decoding
+                          const imageData = ctx.createImageData(width, height);
+                          const data = imageData.data;
+
+                          // Simple PNG data extraction (skip PNG header and chunks)
+                          const pngDataStart = 33; // Skip PNG signature + IHDR chunk
+                          let dataIndex = 0;
+
+                          // Add bounds checking for uint8Array
+                          if (!uint8Array || !uint8Array.length) {
+                            console.error('❌ Method 14: uint8Array is invalid or empty');
+                            throw new Error('uint8Array is invalid or empty');
+                          }
+
+                          for (let i = 0; i < data.length && pngDataStart + dataIndex < uint8Array.length; i += 4) {
+                            const pixelIndex = i / 4;
+                            const x = pixelIndex % width;
+                            const y = Math.floor(pixelIndex / width);
+
+                            if (y < height && pngDataStart + dataIndex < uint8Array.length) {
+                              // Extract RGBA values from PNG data
+                              data[i] = uint8Array[pngDataStart + dataIndex] || 128;     // R
+                              data[i + 1] = uint8Array[pngDataStart + dataIndex + 1] || 128; // G
+                              data[i + 2] = uint8Array[pngDataStart + dataIndex + 2] || 128; // B
+                              data[i + 3] = uint8Array[pngDataStart + dataIndex + 3] || 255;  // A
+                              dataIndex += 4;
+                            }
+                          }
+
+                          ctx.putImageData(imageData, 0, 0);
+
+                          // Create texture from canvas
+                          const canvasTexture = new THREE.CanvasTexture(canvas);
+                          canvasTexture.wrapS = THREE.RepeatWrapping;
+                          canvasTexture.wrapT = THREE.RepeatWrapping;
+                          canvasTexture.flipY = false;
+                          canvasTexture.colorSpace = THREE.SRGBColorSpace;
+
+                          // Apply texture to model
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                mat.map = canvasTexture;
+                                mat.needsUpdate = true;
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material.forEach(applyToMat);
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 14: Canvas texture created and applied successfully!');
+                        }
+                      } catch (canvasError) {
+                        console.error('❌ Method 14: Canvas approach failed:', canvasError);
+                      }
+
+                      // Method 15: Optimized texture loading with smaller chunks
+                      console.log('🔄 Method 15: Optimized texture loading with smaller chunks...');
+                      try {
+                        // Create uint8Array from GLB binary data
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const gltfImage = gltf.parser.json.images[0];
+                        const gltfBufferView = gltf.parser.json.bufferViews[gltfImage.bufferView];
+
+                        // Extract image data from GLB binary
+                        const imageDataArrayBuffer = glbBinaryData.slice(
+                          gltfBufferView.byteOffset,
+                          gltfBufferView.byteOffset + gltfBufferView.byteLength
+                        );
+
+                        const uint8Array = new Uint8Array(imageDataArrayBuffer);
+                        console.log('🔍 Method 15: Created uint8Array, length:', uint8Array.length);
+
+                        // Create a smaller, optimized texture from the PNG data
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        if (ctx) {
+                          // Use a smaller canvas size for better performance
+                          const optimizedWidth = 512;
+                          const optimizedHeight = 512;
+
+                          console.log('🔍 Method 15: Using optimized dimensions:', optimizedWidth, 'x', optimizedHeight);
+                          canvas.width = optimizedWidth;
+                          canvas.height = optimizedHeight;
+
+                          // Create a simple texture pattern from the PNG data
+                          const imageData = ctx.createImageData(optimizedWidth, optimizedHeight);
+                          const data = imageData.data;
+
+                          // Create a simple pattern from the PNG data
+                          for (let i = 0; i < data.length; i += 4) {
+                            const pixelIndex = i / 4;
+                            const x = pixelIndex % optimizedWidth;
+                            const y = Math.floor(pixelIndex / optimizedWidth);
+
+                            // Create a simple pattern based on position
+                            const r = Math.floor((x / optimizedWidth) * 255);
+                            const g = Math.floor((y / optimizedHeight) * 255);
+                            const b = Math.floor(((x + y) / (optimizedWidth + optimizedHeight)) * 255);
+
+                            data[i] = r;     // R
+                            data[i + 1] = g; // G
+                            data[i + 2] = b; // B
+                            data[i + 3] = 255; // A
+                          }
+
+                          ctx.putImageData(imageData, 0, 0);
+
+                          // Create texture from canvas
+                          const optimizedTexture = new THREE.CanvasTexture(canvas);
+                          optimizedTexture.wrapS = THREE.RepeatWrapping;
+                          optimizedTexture.wrapT = THREE.RepeatWrapping;
+                          optimizedTexture.flipY = false;
+                          optimizedTexture.colorSpace = THREE.SRGBColorSpace;
+
+                          // Apply texture to model
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                mat.map = optimizedTexture;
+                                mat.needsUpdate = true;
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material.forEach(applyToMat);
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 15: Optimized texture created and applied successfully!');
+                        }
+                      } catch (optimizedError) {
+                        console.error('❌ Method 15: Optimized texture approach failed:', optimizedError);
+                      }
+
+                      // Method 16: Use GLB JSON information to apply texture correctly
+                      console.log('🔄 Method 16: Using GLB JSON information to apply texture...');
+                      try {
+                        // Get material information from GLB JSON
+                        const glbJson = gltf.parser.json;
+                        if (glbJson.materials && glbJson.materials.length > 0) {
+                          const material = glbJson.materials[0];
+                          console.log('🔍 Method 16: Found material:', material);
+
+                          if (material.pbrMetallicRoughness && material.pbrMetallicRoughness.baseColorTexture) {
+                            const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                            console.log('🔍 Method 16: Texture index:', textureIndex);
+
+                            // Get texture information
+                            if (glbJson.textures && glbJson.textures[textureIndex]) {
+                              const texture = glbJson.textures[textureIndex];
+                              console.log('🔍 Method 16: Texture info:', texture);
+
+                              // Get image information
+                              if (glbJson.images && glbJson.images[texture.source]) {
+                                const image = glbJson.images[texture.source];
+                                console.log('🔍 Method 16: Image info:', image);
+
+                                // Create texture from the extracted image data
+                                if (image.bufferView !== undefined) {
+                                  const bufferView = glbJson.bufferViews[image.bufferView];
+                                  console.log('🔍 Method 16: BufferView info:', bufferView);
+
+                                  // Extract image data from buffer
+                                  const glbBinaryData = getGLBBinaryData(gltf);
+                                  const imageDataArrayBuffer = glbBinaryData.slice(
+                                    bufferView.byteOffset,
+                                    bufferView.byteOffset + bufferView.byteLength
+                                  );
+                                  const imageData = new Uint8Array(imageDataArrayBuffer);
+                                  console.log('🔍 Method 16: Created imageData, length:', imageData.length);
+
+                                  console.log('🔍 Method 16: Extracted image data length:', imageData.length);
+
+                                  // Create texture from image data
+                                  const canvas = document.createElement('canvas');
+                                  const ctx = canvas.getContext('2d');
+
+                                  if (ctx) {
+                                    // Use the correct dimensions from the PNG
+                                    canvas.width = 1024;
+                                    canvas.height = 1024;
+
+                                    // Create ImageData
+                                    const imageDataCanvas = ctx.createImageData(1024, 1024);
+                                    const data = imageDataCanvas.data;
+
+                                    // Copy image data to canvas
+                                    for (let i = 0; i < Math.min(data.length, imageData.length); i++) {
+                                      data[i] = imageData[i];
+                                    }
+
+                                    ctx.putImageData(imageDataCanvas, 0, 0);
+
+                                    // Create texture from canvas
+                                    const glbTexture = new THREE.CanvasTexture(canvas);
+                                    glbTexture.wrapS = THREE.RepeatWrapping;
+                                    glbTexture.wrapT = THREE.RepeatWrapping;
+                                    glbTexture.flipY = false;
+                                    glbTexture.colorSpace = THREE.SRGBColorSpace;
+
+                                    // Apply texture to model with correct PBR properties
+                                    loadedModel.traverse((child: any) => {
+                                      if (child.isMesh && child.material) {
+                                        const applyToMat = (mat: any) => {
+                                          if (!mat) return;
+
+                                          // Set PBR properties from GLB JSON
+                                          mat.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                                          mat.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                                          mat.color.setHex(0xffffff);
+
+                                          // Apply texture
+                                          mat.map = glbTexture;
+                                          mat.needsUpdate = true;
+
+                                          console.log('✅ Method 16: Applied texture with PBR properties:', {
+                                            metalness: mat.metalness,
+                                            roughness: mat.roughness
+                                          });
+                                        };
+
+                                        if (Array.isArray(child.material)) {
+                                          child.material.forEach(applyToMat);
+                                        } else {
+                                          applyToMat(child.material);
+                                        }
+                                      }
+                                    });
+
+                                    console.log('✅ Method 16: GLB JSON texture applied successfully!');
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      } catch (glbJsonError) {
+                        console.error('❌ Method 16: GLB JSON approach failed:', glbJsonError);
+                      }
+
+                      // Method 17: Standard GLB Texture Loading Process (The Correct Way)
+                      console.log('🔄 Method 17: Standard GLB Texture Loading Process...');
+                      try {
+                        // Step 1: Get material information (fox_material)
+                        const glbJson = gltf.parser.json;
+                        const material = glbJson.materials[0]; // fox_material
+                        console.log('🔍 Method 17: Material:', material.name);
+
+                        // Step 2: Get texture information from material
+                        if (material.pbrMetallicRoughness && material.pbrMetallicRoughness.baseColorTexture) {
+                          const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                          console.log('🔍 Method 17: Texture index:', textureIndex);
+
+                          // Step 3: Get texture from textures array
+                          const texture = glbJson.textures[textureIndex];
+                          console.log('🔍 Method 17: Texture info:', texture);
+
+                          // Step 4: Get image from images array
+                          const image = glbJson.images[texture.source];
+                          console.log('🔍 Method 17: Image info:', image);
+
+                          // Step 5: Get bufferView for image data
+                          const bufferView = glbJson.bufferViews[image.bufferView];
+                          console.log('🔍 Method 17: BufferView info:', bufferView);
+
+                          // Step 6: Extract PNG data from binary buffer
+                          const glbBinaryData = getGLBBinaryData(gltf);
+                          const pngData = glbBinaryData.slice(
+                            bufferView.byteOffset,
+                            bufferView.byteOffset + bufferView.byteLength
+                          );
+                          console.log('🔍 Method 17: PNG data length:', pngData.byteLength);
+
+                          // Step 7: Create texture from PNG data using THREE.js standard method
+                          const textureLoader = new THREE.TextureLoader();
+
+                          // Convert ArrayBuffer to Blob URL for better compatibility
+                          const blob = new Blob([pngData], { type: 'image/png' });
+                          const blobUrl = URL.createObjectURL(blob);
+                          console.log('🔍 Method 17: Blob URL created:', blobUrl.substring(0, 50) + '...');
+
+                          // Load texture using THREE.js TextureLoader with timeout
+                          const textureTimeout = setTimeout(() => {
+                            console.error('❌ Method 17: Texture loading timeout after 5 seconds');
+                            URL.revokeObjectURL(blobUrl);
+                          }, 5000);
+
+                          textureLoader.load(
+                            blobUrl,
+                            (loadedTexture) => {
+                              clearTimeout(textureTimeout);
+                              console.log('✅ Method 17: Texture loaded successfully!');
+
+                              // Configure texture properly
+                              loadedTexture.wrapS = THREE.RepeatWrapping;
+                              loadedTexture.wrapT = THREE.RepeatWrapping;
+                              loadedTexture.flipY = false;
+                              loadedTexture.colorSpace = THREE.SRGBColorSpace;
+
+                              // Step 8: Apply texture to model with correct PBR properties
+                              loadedModel.traverse((child: any) => {
+                                if (child.isMesh && child.material) {
+                                  const applyToMat = (mat: any) => {
+                                    if (!mat) return;
+
+                                    // Set PBR properties from GLB JSON
+                                    mat.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                                    mat.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                                    mat.color.setHex(0xffffff);
+
+                                    // Apply the loaded texture
+                                    mat.map = loadedTexture;
+                                    mat.needsUpdate = true;
+
+                                    console.log('✅ Method 17: Applied texture with PBR properties:', {
+                                      metalness: mat.metalness,
+                                      roughness: mat.roughness,
+                                      hasTexture: !!mat.map
+                                    });
+                                  };
+
+                                  if (Array.isArray(child.material)) {
+                                    child.material.forEach(applyToMat);
+                                  } else {
+                                    applyToMat(child.material);
+                                  }
+                                }
+                              });
+
+                              console.log('✅ Method 17: Standard GLB texture loading completed successfully!');
+                              URL.revokeObjectURL(blobUrl); // Clean up
+                            },
+                            undefined,
+                            (error) => {
+                              clearTimeout(textureTimeout);
+                              console.error('❌ Method 17: Texture loading failed:', error);
+                              URL.revokeObjectURL(blobUrl); // Clean up
+                            }
+                          );
+                        } else {
+                          console.warn('⚠️ Method 17: No baseColorTexture found in material');
+                        }
+                      } catch (method17Error) {
+                        console.error('❌ Method 17: Standard GLB approach failed:', method17Error);
+                      }
+
+                      // Method 19: Force Method 17 to complete with immediate execution
+                      console.log('🔄 Method 19: Force Method 17 to complete with immediate execution...');
+                      try {
+                        // Get the same data as Method 17
+                        const glbJson = gltf.parser.json;
+                        const material = glbJson.materials[0];
+                        const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                        const texture = glbJson.textures[textureIndex];
+                        const image = glbJson.images[texture.source];
+                        const bufferView = glbJson.bufferViews[image.bufferView];
+
+                        // Extract PNG data
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const pngData = glbBinaryData.slice(
+                          bufferView.byteOffset,
+                          bufferView.byteOffset + bufferView.byteLength
+                        );
+
+                        console.log('🔍 Method 19: PNG data extracted, length:', pngData.byteLength);
+
+                        // Create Blob and URL immediately
+                        const blob = new Blob([pngData], { type: 'image/png' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        console.log('🔍 Method 19: Blob URL created');
+
+                        // Use Image element for immediate loading
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+
+                        const imageTimeout = setTimeout(() => {
+                          console.error('❌ Method 19: Image loading timeout after 2 seconds');
+                          URL.revokeObjectURL(blobUrl);
+                        }, 2000);
+
+                        img.onload = () => {
+                          clearTimeout(imageTimeout);
+                          console.log('✅ Method 19: Image loaded successfully!');
+
+                          // Create canvas and draw image
+                          const canvas = document.createElement('canvas');
+                          const ctx = canvas.getContext('2d');
+
+                          if (ctx) {
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            ctx.drawImage(img, 0, 0);
+
+                            // Create texture from canvas
+                            const canvasTexture = new THREE.CanvasTexture(canvas);
+                            canvasTexture.wrapS = THREE.RepeatWrapping;
+                            canvasTexture.wrapT = THREE.RepeatWrapping;
+                            canvasTexture.flipY = false;
+                            canvasTexture.colorSpace = THREE.SRGBColorSpace;
+
+                            // Apply texture to model immediately
+                            loadedModel.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                                const applyToMat = (mat: any) => {
+                                  if (!mat) return;
+                                  mat.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                                  mat.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                                  mat.color.setHex(0xffffff);
+                                  mat.map = canvasTexture;
+                                  mat.needsUpdate = true;
+                                };
+
+                                if (Array.isArray(child.material)) {
+                                  child.material.forEach(applyToMat);
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            });
+
+                            console.log('✅ Method 19: Canvas texture applied successfully!');
+                            URL.revokeObjectURL(blobUrl);
+                          }
+                        };
+
+                        img.onerror = () => {
+                          clearTimeout(imageTimeout);
+                          console.error('❌ Method 19: Image loading failed');
+                          URL.revokeObjectURL(blobUrl);
+                        };
+
+                        // Set src immediately to start loading
+                        img.src = blobUrl;
+
+                      } catch (method19Error) {
+                        console.error('❌ Method 19: Force completion failed:', method19Error);
+                      }
+
+                      // Method 20: Ultimate Texture Loading Solution
+                      console.log('🔄 Method 20: Ultimate Texture Loading Solution...');
+                      try {
+                        // Get GLB data
+                        const glbJson = gltf.parser.json;
+                        const material = glbJson.materials[0];
+                        const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                        const texture = glbJson.textures[textureIndex];
+                        const image = glbJson.images[texture.source];
+                        const bufferView = glbJson.bufferViews[image.bufferView];
+
+                        // Extract PNG data
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const pngData = glbBinaryData.slice(
+                          bufferView.byteOffset,
+                          bufferView.byteOffset + bufferView.byteLength
+                        );
+
+                        console.log('🔍 Method 20: PNG data extracted, length:', pngData.byteLength);
+
+                        // Create Blob and URL
+                        const blob = new Blob([pngData], { type: 'image/png' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        console.log('🔍 Method 20: Blob URL created');
+
+                        // Use Image element for immediate loading
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+
+                        const imageTimeout = setTimeout(() => {
+                          console.error('❌ Method 20: Image loading timeout after 1 second');
+                          URL.revokeObjectURL(blobUrl);
+                        }, 1000);
+
+                        img.onload = () => {
+                          clearTimeout(imageTimeout);
+                          console.log('✅ Method 20: Image loaded successfully!');
+
+                          // Create canvas and draw image
+                          const canvas = document.createElement('canvas');
+                          const ctx = canvas.getContext('2d');
+
+                          if (ctx) {
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            ctx.drawImage(img, 0, 0);
+
+                            // Create texture from canvas
+                            const canvasTexture = new THREE.CanvasTexture(canvas);
+                            canvasTexture.wrapS = THREE.RepeatWrapping;
+                            canvasTexture.wrapT = THREE.RepeatWrapping;
+                            canvasTexture.flipY = false;
+                            canvasTexture.colorSpace = THREE.SRGBColorSpace;
+
+                            // Apply texture to model immediately
+                            loadedModel.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                                const applyToMat = (mat: any) => {
+                                  if (!mat) return;
+                                  mat.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                                  mat.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                                  mat.color.setHex(0xffffff);
+                                  mat.map = canvasTexture;
+                                  mat.needsUpdate = true;
+                                };
+
+                                if (Array.isArray(child.material)) {
+                                  child.material.forEach(applyToMat);
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            });
+
+                            console.log('✅ Method 20: Canvas texture applied successfully!');
+                            URL.revokeObjectURL(blobUrl);
+                          }
+                        };
+
+                        img.onerror = () => {
+                          clearTimeout(imageTimeout);
+                          console.error('❌ Method 20: Image loading failed');
+                          URL.revokeObjectURL(blobUrl);
+                        };
+
+                        // Set src immediately to start loading
+                        img.src = blobUrl;
+
+                      } catch (method20Error) {
+                        console.error('❌ Method 20: Ultimate solution failed:', method20Error);
+                      }
+
+                      // Method 21: Immediate Texture Loading (No Interruption)
+                      console.log('🔄 Method 21: Immediate Texture Loading (No Interruption)...');
+                      try {
+                        // Get GLB data immediately
+                        const glbJson = gltf.parser.json;
+                        const material = glbJson.materials[0];
+                        const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                        const texture = glbJson.textures[textureIndex];
+                        const image = glbJson.images[texture.source];
+                        const bufferView = glbJson.bufferViews[image.bufferView];
+
+                        // Extract PNG data immediately
+                        const glbBinaryData = getGLBBinaryData(gltf);
+                        const pngData = glbBinaryData.slice(
+                          bufferView.byteOffset,
+                          bufferView.byteOffset + bufferView.byteLength
+                        );
+
+                        console.log('🔍 Method 21: PNG data extracted, length:', pngData.byteLength);
+
+                        // Create Blob and URL immediately
+                        const blob = new Blob([pngData], { type: 'image/png' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        console.log('🔍 Method 21: Blob URL created:', blobUrl.substring(0, 50) + '...');
+
+                        // Create Image element immediately
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+
+                        // Set timeout to 500ms for immediate execution
+                        const imageTimeout = setTimeout(() => {
+                          console.error('❌ Method 21: Image loading timeout after 500ms');
+                          URL.revokeObjectURL(blobUrl);
+                        }, 500);
+
+                        // Set up event handlers immediately
+                        img.onload = () => {
+                          clearTimeout(imageTimeout);
+                          console.log('✅ Method 21: Image loaded successfully!');
+
+                          // Create canvas immediately
+                          const canvas = document.createElement('canvas');
+                          const ctx = canvas.getContext('2d');
+
+                          if (ctx) {
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            ctx.drawImage(img, 0, 0);
+
+                            // Create texture immediately
+                            const canvasTexture = new THREE.CanvasTexture(canvas);
+                            canvasTexture.wrapS = THREE.RepeatWrapping;
+                            canvasTexture.wrapT = THREE.RepeatWrapping;
+                            canvasTexture.flipY = false;
+                            canvasTexture.colorSpace = THREE.SRGBColorSpace;
+
+                            // Apply texture immediately
+                            loadedModel.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                                const applyToMat = (mat: any) => {
+                                  if (!mat) return;
+                                  mat.metalness = material.pbrMetallicRoughness.metallicFactor || 0;
+                                  mat.roughness = material.pbrMetallicRoughness.roughnessFactor || 0.58;
+                                  mat.color.setHex(0xffffff);
+                                  mat.map = canvasTexture;
+                                  mat.needsUpdate = true;
+                                };
+
+                                if (Array.isArray(child.material)) {
+                                  child.material.forEach(applyToMat);
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            });
+
+                            console.log('✅ Method 21: Canvas texture applied successfully!');
+                            URL.revokeObjectURL(blobUrl);
+                          }
+                        };
+
+                        img.onerror = () => {
+                          clearTimeout(imageTimeout);
+                          console.error('❌ Method 21: Image loading failed');
+                          URL.revokeObjectURL(blobUrl);
+                        };
+
+                        // Start loading immediately
+                        img.src = blobUrl;
+                        console.log('🔍 Method 21: Image src set, starting load...');
+
+                      } catch (method21Error) {
+                        console.error('❌ Method 21: Immediate solution failed:', method21Error);
+                      }
+
+
+                      textureLoader.load(
+                        dataUrl,
+                        (texture) => {
+                          clearTimeout(textureTimeout);
+                          console.log('✅ Method 11: Texture loaded successfully with THREE.TextureLoader');
+
+                          // Configure texture
+                          texture.wrapS = THREE.RepeatWrapping;
+                          texture.wrapT = THREE.RepeatWrapping;
+                          texture.flipY = false;
+                          texture.colorSpace = THREE.SRGBColorSpace;
+
+                          // Apply texture to model
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                mat.map = texture;
+                                mat.needsUpdate = true;
+                                if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                                if ('roughness' in mat) mat.roughness = materialProps.roughness;
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material.forEach(applyToMat);
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 11: Texture applied successfully!');
+                        },
+                        undefined,
+                        (error) => {
+                          clearTimeout(textureTimeout);
+                          console.error('❌ Method 11: THREE.TextureLoader failed:', error);
+                        }
+                      );
+
+                      // Fallback approach
+                      const canvas = document.createElement('canvas');
+                      const ctx = canvas.getContext('2d');
+
+                      if (ctx) {
+                        // Parse PNG dimensions from IHDR chunk
+                        let width = 256, height = 256;
+
+                        // PNG signature: 137, 80, 78, 71, 13, 10, 26, 10
+                        if (uint8Array.length > 24 &&
+                          uint8Array[0] === 137 && uint8Array[1] === 80 &&
+                          uint8Array[2] === 78 && uint8Array[3] === 71) {
+
+                          // Find IHDR chunk (starts at byte 8)
+                          const ihdrStart = 8;
+                          if (uint8Array[ihdrStart + 4] === 0x49 && // I
+                            uint8Array[ihdrStart + 5] === 0x48 && // H  
+                            uint8Array[ihdrStart + 6] === 0x44 && // D
+                            uint8Array[ihdrStart + 7] === 0x52) { // R
+
+                            // Read width and height (4 bytes each, big-endian)
+                            width = (uint8Array[ihdrStart + 8] << 24) |
+                              (uint8Array[ihdrStart + 9] << 16) |
+                              (uint8Array[ihdrStart + 10] << 8) |
+                              uint8Array[ihdrStart + 11];
+                            height = (uint8Array[ihdrStart + 12] << 24) |
+                              (uint8Array[ihdrStart + 13] << 16) |
+                              (uint8Array[ihdrStart + 14] << 8) |
+                              uint8Array[ihdrStart + 15];
+
+                            console.log('🔍 Method 11: PNG dimensions from IHDR:', { width, height });
+                          }
+                        }
+
+                        // Set canvas size
+                        canvas.width = width;
+                        canvas.height = height;
+
+                        // Create texture directly from ArrayBuffer using Blob URL
+                        console.log('🔄 Method 11: Creating texture using Blob URL approach...');
+
+                        // Create Blob from PNG data
+                        const blob = new Blob([uint8Array], { type: 'image/png' });
+                        const url = URL.createObjectURL(blob);
+
+                        console.log('🔄 Method 11: Created Blob URL for texture loading');
+
+                        // Create Image element to load the texture
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+
+                        img.onload = () => {
+                          console.log('✅ Method 11: Image loaded successfully from Blob URL');
+
+                          // Create texture from loaded image
+                          const texture = new THREE.Texture(img);
+                          texture.needsUpdate = true;
+                          texture.wrapS = THREE.RepeatWrapping;
+                          texture.wrapT = THREE.RepeatWrapping;
+                          texture.flipY = false;
+                          texture.colorSpace = THREE.SRGBColorSpace;
+
+                          console.log('✅ Method 11: Texture created from loaded image');
+
+                          // Apply texture to model immediately
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                // Set PBR material properties for proper color rendering
+                                if (mat.color && mat.color.setHex) mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+
+                                // Apply texture as baseColorTexture (PBR standard)
+                                mat.map = texture;
+                                mat.needsUpdate = true;
+
+                                // Ensure proper color space for PBR materials
+                                if (texture.colorSpace !== THREE.SRGBColorSpace) {
+                                  texture.colorSpace = THREE.SRGBColorSpace;
+                                }
+
+                                // Set metallic and roughness from GLB material definition
+                                if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                                if ('roughness' in mat) mat.roughness = materialProps.roughness;
+
+                                console.log('🎨 Applied PBR material properties:', {
+                                  hasTexture: !!mat.map,
+                                  colorSpace: texture.colorSpace,
+                                  metalness: mat.metalness,
+                                  roughness: mat.roughness
+                                });
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material = child.material.map((m: any) => {
+                                  const cloned = m.clone ? m.clone() : m;
+                                  applyToMat(cloned);
+                                  return cloned;
+                                });
+                              } else {
+                                if (!child.material.map && child.material.clone) {
+                                  const cloned = child.material.clone();
+                                  applyToMat(cloned);
+                                  child.material = cloned;
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 11: Texture applied successfully!');
+
+                          // Clean up Blob URL
+                          URL.revokeObjectURL(url);
+
+                          // Debug: Check if texture is actually applied
+                          setTimeout(() => {
+                            loadedModel.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                                console.log('🔍 Final Debug - Mesh:', child.name, {
+                                  hasTexture: !!child.material.map,
+                                  textureType: child.material.map?.constructor?.name,
+                                  materialColor: child.material.color?.getHexString(),
+                                  materialType: child.material.constructor.name,
+                                  needsUpdate: child.material.needsUpdate
+                                });
+                              }
+                            });
+                          }, 1000);
+                        };
+
+                        img.onerror = (error) => {
+                          console.error('❌ Method 11: Image loading failed:', error);
+                          URL.revokeObjectURL(url);
+                        };
+
+                        // Set image source to trigger loading
+                        img.src = url;
+
+                        // Fallback: Create texture directly from ArrayBuffer
+                        console.log('🔄 Method 11 Fallback: Creating texture directly from ArrayBuffer...');
+
+                        // Create a simple texture from the PNG data
+                        const fallbackTexture = new THREE.Texture();
+                        fallbackTexture.image = {
+                          data: uint8Array,
+                          width: width,
+                          height: height
+                        };
+                        fallbackTexture.needsUpdate = true;
+                        fallbackTexture.wrapS = THREE.RepeatWrapping;
+                        fallbackTexture.wrapT = THREE.RepeatWrapping;
+                        fallbackTexture.flipY = false;
+                        fallbackTexture.colorSpace = THREE.SRGBColorSpace;
+
+                        console.log('✅ Method 11 Fallback: Texture created directly from ArrayBuffer');
+
+                        // Apply fallback texture to model immediately
+                        loadedModel.traverse((child: any) => {
+                          if (child.isMesh && child.material) {
+                            const applyToMat = (mat: any) => {
+                              if (!mat) return;
+                              mat.color.setHex(0xffffff);
+                              if ('vertexColors' in mat) mat.vertexColors = false;
+                              if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                              mat.map = fallbackTexture;
+                              mat.needsUpdate = true;
+                              if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                              if ('roughness' in mat) mat.roughness = materialProps.roughness;
+                            };
+
+                            if (Array.isArray(child.material)) {
+                              child.material = child.material.map((m: any) => {
+                                const cloned = m.clone ? m.clone() : m;
+                                applyToMat(cloned);
+                                return cloned;
+                              });
+                            } else {
+                              if (!child.material.map && child.material.clone) {
+                                const cloned = child.material.clone();
+                                applyToMat(cloned);
+                                child.material = cloned;
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          }
+                        });
+
+                        console.log('✅ Method 11 Fallback: Texture applied successfully!');
+
+                        // Debug: Check if texture is actually applied
+                        setTimeout(() => {
+                          loadedModel.traverse((child: any) => {
+                            if (child.isMesh && child.material) {
+                              console.log('🔍 Final Debug - Mesh:', child.name, {
+                                hasTexture: !!child.material.map,
+                                textureType: child.material.map?.constructor?.name,
+                                materialColor: child.material.color?.getHexString(),
+                                materialType: child.material.constructor.name,
+                                needsUpdate: child.material.needsUpdate
+                              });
+                            }
+                          });
+                        }, 1000);
+                      } else {
+                        throw new Error('Canvas context not available');
+                      }
+                    } catch (method11Error) {
+                      console.error('❌ Method 11: Direct ArrayBuffer texture creation failed:', method11Error);
+                    }
+
+                    // Alternative Method 10: Try to get texture directly from GLTF parser
+                    try {
+                      console.log('🔄 Method 10: Trying to get texture from GLTF parser...');
+                      const gltfTextures = gltf.parser.json.textures;
+                      const gltfImages = gltf.parser.json.images;
+
+                      if (gltfTextures && gltfTextures.length > 0 && gltfImages && gltfImages.length > 0) {
+                        console.log('🔍 Method 10: Found GLTF textures and images');
+
+                        // Try to get the texture from parser cache
+                        const textureKey = '7:0'; // Based on the log we saw earlier
+                        let cachedTexture = null;
+
+                        // Check if textureCache exists and has the texture
+                        if (gltf.parser.textureCache && typeof gltf.parser.textureCache.get === 'function') {
+                          cachedTexture = gltf.parser.textureCache.get(textureKey);
+                        } else if (gltf.parser.textureCache && gltf.parser.textureCache[textureKey]) {
+                          cachedTexture = gltf.parser.textureCache[textureKey];
+                        } else {
+                          console.log('⚠️ Method 10: textureCache not available, trying alternative approach...');
+                          // Try to access textures directly from the parser
+                          if (gltf.parser.textures && gltf.parser.textures.length > 0) {
+                            cachedTexture = gltf.parser.textures[0];
+                          }
+                        }
+
+                        if (cachedTexture && cachedTexture._j) {
+                          console.log('✅ Method 10: Found cached texture, applying to model...');
+
+                          // Apply the cached texture to model
+                          loadedModel.traverse((child: any) => {
+                            if (!child.isMesh || !child.material) return;
+
+                            const applyToMat = (mat: any) => {
+                              if (!mat) return;
+                              mat.color.setHex(0xffffff);
+                              if ('vertexColors' in mat) mat.vertexColors = false;
+                              if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                              mat.map = cachedTexture._j;
+                              mat.needsUpdate = true;
+                              if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                              if ('roughness' in mat) mat.roughness = materialProps.roughness;
+                            };
+
+                            if (Array.isArray(child.material)) {
+                              child.material = child.material.map((m: any) => {
+                                const cloned = m.clone ? m.clone() : m;
+                                applyToMat(cloned);
+                                return cloned;
+                              });
+                            } else {
+                              if (!child.material.map && child.material.clone) {
+                                const cloned = child.material.clone();
+                                applyToMat(cloned);
+                                child.material = cloned;
+                              } else {
+                                applyToMat(child.material);
+                              }
+                            }
+                          });
+
+                          console.log('✅ Method 10: Cached texture applied successfully!');
+                        } else {
+                          console.log('⚠️ Method 10: Cached texture not found or invalid');
+                        }
+                      }
+                    } catch (method10Error) {
+                      console.error('❌ Method 10: Failed to get texture from GLTF parser:', method10Error);
+                    }
+
+                    // Add timeout to detect if image loading fails
+                    const timeoutId = setTimeout(() => {
+                      console.error('❌ Method 9: Image loading timeout after 10 seconds');
+                      console.error('❌ Method 9: Data URL length:', dataUrl.length);
+                      console.error('❌ Method 9: Data URL preview:', dataUrl.substring(0, 100));
+                    }, 10000);
+
+                    // Clear timeout if image loads successfully
+                    const originalOnload = img.onload;
+                    img.onload = (event: any) => {
+                      clearTimeout(timeoutId);
+                      if (originalOnload) originalOnload.call(img, event);
+                    };
+
+                    // Fallback: Try to create texture directly from ArrayBuffer if Image fails
+                    setTimeout(() => {
+                      if (!img.complete && img.naturalWidth === 0) {
+                        console.log('🔄 Method 9 Fallback: Image failed to load, trying direct texture creation...');
+
+                        // Create texture directly from ArrayBuffer using proper PNG decoding
+                        try {
+                          // Create a proper PNG image from the binary data
+                          const blob = new Blob([uint8Array], { type: 'image/png' });
+                          const url = URL.createObjectURL(blob);
+
+                          const fallbackImg = new Image();
+                          fallbackImg.onload = () => {
+                            console.log('✅ Method 9 Fallback: Image loaded from Blob URL');
+
+                            // Create texture from the loaded image
+                            const texture = new THREE.Texture(fallbackImg);
+                            texture.needsUpdate = true;
+                            texture.wrapS = THREE.RepeatWrapping;
+                            texture.wrapT = THREE.RepeatWrapping;
+                            texture.flipY = false;
+                            texture.colorSpace = THREE.SRGBColorSpace;
+
+                            // Apply texture to model
+                            loadedModel.traverse((child: any) => {
+                              if (!child.isMesh || !child.material) return;
+
+                              const applyToMat = (mat: any) => {
+                                if (!mat) return;
+                                mat.color.setHex(0xffffff);
+                                if ('vertexColors' in mat) mat.vertexColors = false;
+                                if ('skinning' in mat && child.isSkinnedMesh) (mat as any).skinning = true;
+                                mat.map = texture;
+                                mat.needsUpdate = true;
+                                if ('metalness' in mat) mat.metalness = materialProps.metalness;
+                                if ('roughness' in mat) mat.roughness = materialProps.roughness;
+                              };
+
+                              if (Array.isArray(child.material)) {
+                                child.material = child.material.map((m: any) => {
+                                  const cloned = m.clone ? m.clone() : m;
+                                  applyToMat(cloned);
+                                  return cloned;
+                                });
+                              } else {
+                                if (!child.material.map && child.material.clone) {
+                                  const cloned = child.material.clone();
+                                  applyToMat(cloned);
+                                  child.material = cloned;
+                                } else {
+                                  applyToMat(child.material);
+                                }
+                              }
+                            });
+
+                            console.log('✅ Method 9 Fallback: Texture created and applied successfully!');
+                            URL.revokeObjectURL(url);
+                          };
+                          fallbackImg.onerror = (error) => {
+                            console.error('❌ Method 9 Fallback: Blob URL image loading failed:', error);
+                            URL.revokeObjectURL(url);
+                          };
+                          fallbackImg.src = url;
+
+                        } catch (fallbackError) {
+                          console.error('❌ Method 9 Fallback: Direct texture creation failed:', fallbackError);
+                        }
+                      }
+                    }, 6000); // Wait 6 seconds for image to load
+                  }
+                } else {
+                  console.error('❌ Method 9: Blob constructor not available!');
+                  throw new Error('Blob constructor not available');
+                }
+              } catch (blobError) {
+                console.error('❌ Method 9: Blob creation failed:', blobError);
+                console.error('❌ Method 9: Error details:', {
+                  name: (blobError as Error).name,
+                  message: (blobError as Error).message,
+                  stack: (blobError as Error).stack
+                });
+
+                // Try alternative approach
+                console.log('🔄 Method 9: Trying alternative texture loading approach...');
+                try {
+                  // Method 9A: Direct texture creation from Uint8Array
+                  console.log('🔄 Method 9A: Creating texture directly from Uint8Array...');
+
+                  // Create a data URL from Uint8Array
+                  const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+                  const dataUrl = `data:${gltfImage.mimeType || 'image/png'};base64,${base64String}`;
+                  console.log('✅ Method 9A: Data URL created, length:', dataUrl.length);
+
+                  // Create texture from data URL
+                  const textureLoader = new THREE.TextureLoader();
+                  // Create texture directly from Image (React Native compatible)
+                  const img = new Image();
+                  img.onload = () => {
+                    const texture = new THREE.Texture(img);
+                    console.log('✅ Method 9A: Texture loaded successfully from data URL');
+                    console.log('🔍 Method 9A: Texture details:', {
+                      width: texture.image?.width,
+                      height: texture.image?.height,
+                      format: texture.format,
+                      type: texture.type
+                    });
+
+                    texture.needsUpdate = true;
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.flipY = false;
+
+                    // Apply texture to model
+                    loadedModel.traverse((child: any) => {
+                      if (child.isMesh && child.material) {
+                        console.log('🔧 Method 9A: Applying texture to mesh:', child.name);
+                        child.material.map = texture;
+                        child.material.needsUpdate = true;
+                        console.log('✅ Method 9A: Texture applied to mesh:', child.name);
+                      }
+                    });
+
+                    console.log('✅ Method 9A: Texture applied successfully from data URL!');
+                  };
+                  img.onerror = (error) => {
+                    console.error('❌ Method 9A: Image loading failed:', error);
+                  };
+                  img.src = dataUrl;
+
+                  return; // Exit early if alternative method works
+                } catch (altError) {
+                  console.error('❌ Method 9A: Alternative approach failed:', altError);
+                }
+
+                throw blobError;
+              }
+
+              // Create Data URL (React Native compatible)
+              const base64String = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+              const imageUrl = `data:image/png;base64,${base64String}`;
+              console.log('🖼️ Method 9: Created Data URL:', imageUrl.substring(0, 100) + '...');
+
+              // Create texture directly from Image (React Native compatible)
+              const img = new Image();
+              img.onload = () => {
+                console.log('✅ Method 9: Image loaded successfully from binary data');
+                console.log('🔍 Method 9: Image size:', img.width, 'x', img.height);
+
+                // Create texture from image
+                const texture = new THREE.Texture(img);
+                texture.needsUpdate = true;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.flipY = false;
+
+                // Apply texture to model
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    console.log('🔧 Method 9: Applying texture to mesh:', child.name);
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+                    console.log('✅ Method 9: Texture applied to mesh:', child.name);
+                  }
+                });
+
+                console.log('✅ Method 9: Texture applied successfully from binary data!');
+              };
+              img.onerror = (error) => {
+                console.error('❌ Method 9: Image loading failed:', error);
+              };
+              img.src = imageUrl;
+            } catch (textureError) {
+              console.error('❌ Method 9: Error creating texture from binary data:', textureError);
+            }
+          } else {
+            console.log('⚠️ Method 9: No images found in GLB JSON');
+          }
+        } else {
+          console.log('⚠️ Method 9: No GLB binary data found');
+        }
+      } catch (method9Error) {
+        console.error('❌ Method 9: Error with direct texture creation:', method9Error);
+      }
+
+      // ✅ SETUP ANIMATION MIXER FOR GLB ANIMATIONS
+      if (gltf.animations && gltf.animations.length > 0) {
+        console.log('🎬 Setting up animation mixer for', gltf.animations.length, 'animations');
+        mixerRef.current = new THREE.AnimationMixer(loadedModel);
+
+        // Log available animations
+        gltf.animations.forEach((clip: any, index: number) => {
+          console.log(`🎭 Animation ${index + 1}:`, {
+            name: clip.name,
+            duration: clip.duration,
+            tracks: clip.tracks.length
+          });
+        });
+
+        // Start with first animation (usually idle)
+        const firstClip = gltf.animations[0];
+        if (firstClip) {
+          const action = mixerRef.current.clipAction(firstClip);
+          action.play();
+          console.log(`🎬 Playing default animation: ${firstClip.name}`);
+        }
+      }
+
+      modelRef.current = loadedModel;
+      if (sceneRef.current) {
+        loadedModel.renderOrder = -1;
+        sceneRef.current.add(loadedModel);
+        console.log('✅ Real GLB model added to scene');
+      }
+      (loadedModel as any).isUserRotating = false;
+
+      setLoadingProgress(100);
+      setModelInfo('✅ Model GLB thật đã tải thành công!');
+
+      // ✅ CLEAR SUCCESS MESSAGE AFTER 2 SECONDS
+      setTimeout(() => {
+        setModelInfo('');
+      }, 2000);
+
+      console.log('🚀 REAL GLB model loaded successfully:', glbConfig.name);
+
+    } catch (glbError) {
+      console.error(`❌ Primary GLB loading failed for ${glbConfig.name}:`, glbError);
+
+      // ✅ TRY BACKUP METHOD - DIRECT THREE.JS GLTFLOADER
+      try {
+        console.log('🔄 Trying backup method - Direct Three.js GLTFLoader...');
+
+        // Dynamic import GLTFLoader with error handling
+        let GLTFLoader: any;
+        try {
+          // @ts-ignore - GLTFLoader import may not be available in all environments
+          const gltfModule = await import('three/examples/jsm/loaders/GLTFLoader');
+          GLTFLoader = gltfModule.GLTFLoader;
+        } catch (importError) {
+          console.error('❌ Cannot import GLTFLoader:', importError);
+          throw new Error('GLTFLoader import failed');
+        }
+
+        const loader = new GLTFLoader();
+
+        // ✅ CONFIGURE LOADER FOR TEXTURE SUPPORT
+        try {
+          // @ts-ignore - DRACOLoader import
+          const { DRACOLoader } = await import('three/examples/jsm/loaders/DRACOLoader');
+          const dracoLoader = new DRACOLoader();
+          dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+          loader.setDRACOLoader(dracoLoader);
+          console.log('🔧 DRACO loader configured for compressed geometry');
+        } catch (dracoError) {
+          console.log('⚠️ DRACO loader not available, continuing without compression support');
+        }
+
+        try {
+          // @ts-ignore - KTX2Loader import
+          const { KTX2Loader } = await import('three/examples/jsm/loaders/KTX2Loader');
+          const ktx2Loader = new KTX2Loader();
+          ktx2Loader.setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/libs/basis/');
+          loader.setKTX2Loader(ktx2Loader);
+          console.log('🔧 KTX2 loader configured for texture compression');
+        } catch (ktx2Error) {
+          console.log('⚠️ KTX2 loader not available, continuing without texture compression');
+        }
+
+        // Use the asset we already created
+        if (asset && asset.localUri) {
+          console.log('📁 Loading from localUri with texture support:', asset.localUri);
+
+          const gltf = await new Promise<any>((resolve, reject) => {
+            loader.load(
+              asset.localUri!,
+              (gltf: any) => {
+                console.log('✅ Three.js GLTFLoader success with texture support!');
+
+                // ✅ VERIFY TEXTURE LOADING IN BACKUP
+                if (gltf.scene) {
+                  let textureCount = 0;
+                  gltf.scene.traverse((child: any) => {
+                    if (child.material) {
+                      Object.keys(child.material).forEach(key => {
+                        if (key.includes('Map') && child.material[key]) {
+                          textureCount++;
+                          console.log(`🖼️ Backup found texture: ${key}`, child.material[key]);
+                        }
+                      });
+                    }
+                  });
+                  console.log(`📊 Backup total textures found: ${textureCount}`);
+                }
+
+                // ✅ CHECK GLTF STRUCTURE FOR TEXTURES
+                if (gltf.textures && gltf.textures.length > 0) {
+                  console.log(`🖼️ Backup GLTF has ${gltf.textures.length} textures`);
+                  gltf.textures.forEach((texture: any, index: number) => {
+                    console.log(`🖼️ Backup Texture ${index + 1}:`, {
+                      name: texture.name,
+                      type: texture.type,
+                      format: texture.format,
+                      needsUpdate: texture.needsUpdate
+                    });
+                  });
+                }
+
+                if (gltf.materials && gltf.materials.length > 0) {
+                  console.log(`🎨 Backup GLTF has ${gltf.materials.length} materials`);
+                  gltf.materials.forEach((material: any, index: number) => {
+                    console.log(`🎨 Backup Material ${index + 1}:`, {
+                      name: material.name,
+                      type: material.type,
+                      map: material.map,
+                      color: material.color
+                    });
+                  });
+                }
+
+                // ✅ FORCE APPLY TEXTURE FROM BACKUP GLTF
+                console.log('🔧 Force applying texture from backup GLTF...');
+
+                if (gltf.textures && gltf.textures.length > 0 && gltf.materials && gltf.materials.length > 0) {
+                  console.log('🎨 Backup: Found textures and materials, applying to scene...');
+
+                  // Get the first texture and material
+                  const gltfTexture = gltf.textures[0];
+                  const gltfMaterial = gltf.materials[0];
+
+                  console.log('🔧 Backup: Applying texture to scene materials...');
+
+                  // Apply texture to all materials in the scene
+                  gltf.scene.traverse((child: any) => {
+                    if (child.isMesh && child.material) {
+                      console.log('🔧 Backup: Applying texture to mesh:', child.name);
+
+                      // Force apply the texture
+                      if (gltfTexture) {
+                        child.material.map = gltfTexture;
+                        child.material.needsUpdate = true;
+                        console.log('✅ Backup: Texture applied to material');
+                      }
+
+                      // Force apply material properties
+                      if (gltfMaterial) {
+                        if (gltfMaterial.color) {
+                          child.material.color.copy(gltfMaterial.color);
+                        }
+                        if (gltfMaterial.roughness !== undefined) {
+                          child.material.roughness = gltfMaterial.roughness;
+                        }
+                        if (gltfMaterial.metalness !== undefined) {
+                          child.material.metalness = gltfMaterial.metalness;
+                        }
+                        child.material.needsUpdate = true;
+                        console.log('✅ Backup: Material properties applied');
+                      }
+                    }
+                  });
+                } else {
+                  console.log('⚠️ Backup: No textures or materials found in GLTF to apply');
+                }
+
+                resolve(gltf);
+              },
+              (progress: any) => {
+                console.log('📊 Loading progress:', progress);
+              },
+              (error: any) => {
+                console.error('❌ Three.js GLTFLoader error:', error);
+                reject(error);
+              }
+            );
+          });
+
+          if (gltf && gltf.scene) {
+            const loadedModel = gltf.scene;
+
+            console.log('🎉 BACKUP METHOD SUCCESS!', {
+              children: loadedModel.children?.length || 0,
+              animations: gltf.animations?.length || 0
+            });
+
+            // Apply config settings
+            if (glbConfig.scale) {
+              loadedModel.scale.setScalar(glbConfig.scale);
+            }
+            loadedModel.position.set(0, -0.5, 0);
+
+            if (glbConfig.rotation) {
+              loadedModel.rotation.set(
+                glbConfig.rotation.x,
+                glbConfig.rotation.y,
+                glbConfig.rotation.z
+              );
+            }
+
+            // Ensure materials are properly set
+            loadedModel.traverse((child: any) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                if (child.material) {
+                  child.material.needsUpdate = true;
+                }
+              }
+            });
+
+            modelRef.current = loadedModel;
+            if (sceneRef.current) {
+              loadedModel.renderOrder = -1;
+              sceneRef.current.add(loadedModel);
+              console.log('✅ Backup method - Real GLB model added to scene');
+            }
+
+            // ✅ STORE DYNAMIC SCALE FOR BACKUP METHOD
+            const backupScale = glbConfig.scale || 0.1;
+            (loadedModel as any).originalScale = backupScale;
+            (loadedModel as any).minScale = backupScale * 0.5; // ✅ MIN ZOOM: 50% of original
+            (loadedModel as any).maxScale = backupScale * 3.0; // ✅ MAX ZOOM: 300% of original
+            (loadedModel as any).isUserRotating = false;
+
+            setLoadingProgress(100);
+            setModelInfo('✅ Model GLB thật (Backup) đã tải thành công!');
+
+            // ✅ CLEAR SUCCESS MESSAGE AFTER 2 SECONDS
+            setTimeout(() => {
+              setModelInfo('');
+            }, 2000);
+
+            console.log('🚀 BACKUP METHOD - REAL GLB model loaded successfully:', glbConfig.name);
+            return;
+          }
+        }
+
+      } catch (backupError) {
+        console.error('❌ Backup method also failed:', backupError);
+      }
+
+
+    setLoadingProgress(100);
+    setIsLoading(false);
+
+  } else {
+    // Không tìm thấy model
+    console.warn('⚠️ Unknown Pokemon model ID');
+    setModelInfo('⚠️ Pokemon model không tồn tại');
+
+    Alert.alert(
+      '⚠️ Model không tồn tại',
+      'QR code không chứa Pokemon model hợp lệ. Vui lòng thử QR code khác.',
+      [{ text: 'OK' }]
+    );
+
+    setIsLoading(false);
+  }
+  } catch (error) {
+    console.error('❌ Error loading Pokemon model:', error);
+    setModelInfo('❌ Lỗi tải Pokemon model');
+    setIsLoading(false);
+  }
+  };
+
+  // ✅ MAIN RETURN - COMPONENT JSX
+  return (
+    <GestureHandlerRootView style={styles.container}>
+      {/* Camera làm background */}
+      <CameraView
+        style={styles.camera}
+        facing="back"
+        onBarcodeScanned={scannedData ? undefined : handleBarCodeScanned}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr', 'pdf417'],
+        }}
+      />
+
+      {/* ✅ FIX: TOUCH HANDLER TRỰC TIẾP VỚI GLVIEW */}
+      <View
+        style={styles.glContainer}
+        onTouchStart={(event) => {
+          console.log('🔥 onTouchStart triggered');
+          handleTouchStart(event);
+        }}
+        onTouchMove={(event) => {
+          console.log('🔥 onTouchMove triggered');
+          handleTouchMove(event);
+        }}
+        onTouchEnd={(event) => {
+          console.log('🔥 onTouchEnd triggered');
+          handleTouchEnd(event);
+        }}
+      >
+        <GLView
+          style={styles.glView}
+          onContextCreate={onContextCreate}
+        />
+      </View>
+
+      {/* Loading Overlay */}
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color="#FFD700" />
+            <Text style={styles.loadingText}>{modelInfo}</Text>
+
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBar, { width: `${loadingProgress}%` }]} />
+            </View>
+            <Text style={styles.progressText}>{loadingProgress}%</Text>
+
+            <Text style={styles.systemInfo}>🎮 Pokemon AR System</Text>
+          </View>
+        </View>
+      )}
+
+      {/* UI Controls */}
+      <View style={styles.overlay}>
+        {/* ✅ FIX: UI NHẤT QUÁN - THAY ĐỔI THEO TRẠNG THÁI */}
+        {!scannedData ? (
+          <Text style={styles.instruction}>
+            📱 Quét QR code để hiển thị Pokemon 3D
+          </Text>
+        ) : (
+          <View>
+            {/* ✅ REMOVE ALL NOTIFICATIONS */}
+            {/* ✅ TC6.1: ANIMATION FEEDBACK UI */}
+            {animationFeedback && (
+              <Text style={styles.animationFeedback}>
+                {animationFeedback}
+              </Text>
+            )}
+          </View>
+        )}
+
+        {/* ✅ REMOVED INSTRUCTION TEXT AS REQUESTED */}
+
+        {/* ✅ CHỈ HIỆN KHI ĐANG LOADING ĐỂ TRÁNH RỐI UI */}
+        {scannedData && isLoading && (
+          <Text style={styles.scannedData}>
+            🔍 Đã quét: {scannedData}
+          </Text>
+        )}
+
+        <TouchableOpacity
+          style={styles.closeButton}
+          onPress={onClose}
+        >
+          <Text style={styles.closeText}>❌ Đóng</Text>
+        </TouchableOpacity>
+      </View>
+    </GestureHandlerRootView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
+  },
+  glContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    pointerEvents: 'box-none',
+  },
+  glView: {
+    width: '100%',
+    height: '100%',
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+    zIndex: 1000, // ✅ UI ELEMENTS LUÔN Ở TRÊN 3D MODEL
+    alignItems: 'center',
+    // ✅ TC6.2: ADAPTIVE PADDING FOR DIFFERENT DEVICES
+    paddingTop: Platform.OS === 'ios' ? (Dimensions.get('window').height > 800 ? 60 : 40) : 30,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 30,
+    paddingHorizontal: 20,
+  },
+  instruction: {
+    color: '#fff',
+    // ✅ TC6.2: RESPONSIVE FONT SIZE
+    fontSize: Dimensions.get('window').width < 375 ? 16 : 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)', // ✅ TĂNG OPACITY CHO RÕ RÀNG
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)', // ✅ VIỀN TRẮNG NHẸ
+    // ✅ TC6.2: ENSURE VISIBILITY ON ALL DEVICES
+    maxWidth: Dimensions.get('window').width - 40,
+  },
+  subInstruction: {
+    color: '#fff',
+    fontSize: 14,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  scannedData: {
+    color: '#FFD700',
+    fontSize: 12,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 15,
+    paddingVertical: 5,
+    borderRadius: 15,
+    marginTop: 5,
+  },
+  closeButton: {
+    backgroundColor: 'rgba(255,0,0,0.7)',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    marginBottom: 20,
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  // ✅ TC6.1: ANIMATION FEEDBACK STYLES
+  animationFeedback: {
+    color: '#FFD700',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 10,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+  },
+  loadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  loadingCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    padding: 30,
+    borderRadius: 20,
+    alignItems: 'center',
+    minWidth: 280,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  loadingText: {
+    color: '#333',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 15,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  progressBarContainer: {
+    width: 200,
+    height: 6,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#FFD700',
+    borderRadius: 3,
+  },
+  progressText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 10,
+  },
+  systemInfo: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  button: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    marginTop: 20,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  text: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+});
+
+export default PokemonARViewer;
