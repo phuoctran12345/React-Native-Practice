@@ -192,6 +192,76 @@ const PokemonARViewer = ({ onClose }: PokemonARViewerProps) => {
     }
   };
 
+  // ✅ LOAD POKEMON MODEL FUNCTION
+  const loadPokemonModel = async (qrData: string) => {
+    try {
+      console.log('🎯 Loading Pokemon model for QR data:', qrData);
+      setIsLoading(true);
+      setLoadingProgress(10);
+      setModelInfo('🔍 Đang xác định model...');
+
+      // Get model configuration
+      const glbConfig = getGLBModelConfig(qrData);
+      if (!glbConfig) {
+        throw new Error(`Không tìm thấy cấu hình model cho QR data: ${qrData}`);
+      }
+
+      console.log('📦 Model config:', glbConfig);
+      setModelInfo(`📦 Đang tải ${glbConfig.name}...`);
+      setLoadingProgress(30);
+
+      // Load Fox texture
+      const foxTexture = await loadFoxTexture();
+      if (foxTexture) {
+        console.log('✅ Fox texture loaded successfully!');
+      } else {
+        console.log('⚠️ Fox texture failed to load, using fallback colors');
+      }
+
+      // Load model using expo-three
+      const asset = Asset.fromModule(require('../assets/models/Fox.glb'));
+      await asset.downloadAsync();
+      
+      const gltf = await loadAsync(asset);
+      const loadedModel = gltf.scene;
+
+      // Apply texture to model
+      if (foxTexture) {
+        loadedModel.traverse((child: any) => {
+          if (child.isMesh && child.material) {
+            child.material.map = foxTexture;
+            child.material.needsUpdate = true;
+          }
+        });
+      }
+
+      // Set up model
+      loadedModel.position.set(0, -0.1, 0);
+      loadedModel.scale.setScalar(0.1);
+      
+      // Store model reference
+      modelRef.current = loadedModel;
+      
+      setLoadingProgress(100);
+      setModelInfo(`✅ ${glbConfig.name} đã sẵn sàng!`);
+      setIsLoading(false);
+      
+      console.log('✅ Model loaded successfully!');
+      
+    } catch (error) {
+      console.error('❌ Model loading failed:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setModelInfo(`❌ Lỗi tải model: ${errorMessage}`);
+      setIsLoading(false);
+      
+      Alert.alert(
+        '❌ Lỗi tải model',
+        'Không thể tải model 3D. Vui lòng thử lại.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
   // ✅ TC3.1: ENHANCED RAYCASTING FOR TOUCH ANIMATION TRIGGER
   const performRaycasting = (touchX: number, touchY: number, screenWidth: number, screenHeight: number) => {
     if (!modelRef.current || !cameraRef.current || !rendererRef.current) {
@@ -631,11 +701,11 @@ const PokemonARViewer = ({ onClose }: PokemonARViewerProps) => {
   const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
     console.log('🎯 QR Code scanned successfully:', data);
     setScannedData(data);
-    loadPokemonModel(data);
+    loadPokemonModelFromQR(data);
   };
 
   // Load Pokemon model từ QR data
-  const loadPokemonModel = async (qrData: string) => {
+  const loadPokemonModelFromQR = async (qrData: string) => {
     try {
       setIsLoading(true);
       setLoadingProgress(10);
@@ -3530,7 +3600,6 @@ const PokemonARViewer = ({ onClose }: PokemonARViewerProps) => {
 
     setLoadingProgress(100);
     setIsLoading(false);
-
   } else {
     // Không tìm thấy model
     console.warn('⚠️ Unknown Pokemon model ID');
