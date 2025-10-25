@@ -250,19 +250,82 @@ const FoxARViewer: React.FC<FoxARViewerProps> = ({ onClose }) => {
       setLoadingProgress(30);
       setModelInfo('Đang giải mã model...');
 
-      // Load the model using GLTFLoader
+      // Load the model using GLTFLoader with texture support
       const GLTFLoader = (await import('three/examples/jsm/loaders/GLTFLoader.js')).GLTFLoader;
+      const DRACOLoader = (await import('three/examples/jsm/loaders/DRACOLoader.js')).DRACOLoader;
+      
       const loader = new GLTFLoader();
+      
+      // ✅ CRITICAL: Configure loader to handle textures properly
+      loader.setRequestHeader({});
+      
+      // ✅ Enable texture loading from embedded data
+      (loader as any).setResourcePath('');
+      
+      console.log('🔧 GLTFLoader configured for texture loading');
+      
+      // Setup DRACO loader for compressed models (optional)
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+      loader.setDRACOLoader(dracoLoader);
       
       const gltf = await new Promise((resolve, reject) => {
         loader.load(
           asset.localUri || asset.uri,
-          (gltf) => resolve(gltf),
+          (gltf) => {
+            console.log('✅ ========== GLB LOADED SUCCESSFULLY ==========');
+            console.log('🔍 Checking loaded content:');
+            console.log('  ✓ Has scene:', !!gltf.scene);
+            console.log('  ✓ Has animations:', !!gltf.animations);
+            console.log('  ✓ Has parser:', !!gltf.parser);
+            const gltfAny = gltf as any;
+            console.log('  ✓ Has textures array:', !!gltfAny.textures);
+            console.log('  ✓ Textures count:', gltfAny.textures?.length || 0);
+            console.log('  ✓ Scenes:', gltf.scenes.length);
+            console.log('  ✓ Animations:', gltf.animations?.length || 0);
+            console.log('  ✓ Cameras:', gltf.cameras?.length || 0);
+            
+            // Log texture information if available
+            if (gltf.parser && gltf.parser.json) {
+              console.log('  - Images in JSON:', gltf.parser.json.images?.length || 0);
+              console.log('  - Textures in JSON:', gltf.parser.json.textures?.length || 0);
+              console.log('  - Materials in JSON:', gltf.parser.json.materials?.length || 0);
+              
+              // Log image details
+              if (gltf.parser.json.images) {
+                gltf.parser.json.images.forEach((img: any, idx: number) => {
+                  console.log(`  - Image ${idx + 1}:`, {
+                    mimeType: img.mimeType,
+                    hasUri: !!img.uri,
+                    hasBufferView: img.bufferView !== undefined,
+                    bufferViewIndex: img.bufferView
+                  });
+                });
+              }
+              
+              // Log texture details
+              if (gltf.parser.json.textures) {
+                gltf.parser.json.textures.forEach((tex: any, idx: number) => {
+                  console.log(`  - Texture ${idx + 1}:`, {
+                    hasSource: tex.source !== undefined,
+                    sourceIndex: tex.source,
+                    hasSampler: tex.sampler !== undefined
+                  });
+                });
+              }
+            }
+            
+            resolve(gltf);
+          },
           (progress) => {
             const percent = Math.round((progress.loaded / progress.total) * 70) + 30;
             setLoadingProgress(percent);
+            console.log(`📊 Loading progress: ${percent}%`);
           },
-          (error) => reject(error)
+          (error) => {
+            console.error('❌ Error loading GLB:', error);
+            reject(error);
+          }
         );
       });
 
@@ -295,11 +358,11 @@ const FoxARViewer: React.FC<FoxARViewerProps> = ({ onClose }) => {
       const scene = new THREE.Scene();
       sceneRef.current = scene;
 
-      // ✅ ADVANCED LIGHTING SETUP
-      const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+      // ✅ ADVANCED LIGHTING SETUP - ENHANCED FOR TEXTURE VISIBILITY
+      const ambientLight = new THREE.AmbientLight(0xffffff, 2.0); // Increased to 2.0 for texture visibility
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 3.0); // Increased intensity
       directionalLight.position.set(10, 10, 5);
       directionalLight.castShadow = true;
       directionalLight.shadow.mapSize.width = 2048;
@@ -311,9 +374,14 @@ const FoxARViewer: React.FC<FoxARViewerProps> = ({ onClose }) => {
       directionalLight.shadow.camera.top = 10;
       directionalLight.shadow.camera.bottom = -10;
       scene.add(directionalLight);
+      
+      // Add second directional light from opposite side
+      const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.6);
+      directionalLight2.position.set(-5, 5, -5);
+      scene.add(directionalLight2);
 
       // Add hemisphere light for more realistic lighting
-      const hemisphereLight = new THREE.HemisphereLight(0x87CEEB, 0x8B4513, 0.3);
+      const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x999999, 0.8); // Increased
       scene.add(hemisphereLight);
 
       // Create camera with proper positioning
@@ -327,8 +395,58 @@ const FoxARViewer: React.FC<FoxARViewerProps> = ({ onClose }) => {
       cameraRef.current = camera;
 
       // Load Fox model
+      console.log('🚀 [1] Starting to load Fox model...');
       const gltf = await loadFoxModel() as any;
+      console.log('✅ [2] Fox model loaded! GLTF object:', Object.keys(gltf));
+      
       const foxModel = gltf.scene;
+      console.log('📦 [3] Got fox scene, children count:', foxModel.children.length);
+      
+      // ✅ CRITICAL: Wait for all textures to fully load before processing
+      console.log('⏳ [4] Waiting for textures to load...');
+      await new Promise((resolve) => {
+        const checkTexture = () => {
+          console.log('🔍 [5] Checking texture status...');
+          let allTexturesLoaded = true;
+          let textureCount = 0;
+          let loadedCount = 0;
+          
+          foxModel.traverse((child: any) => {
+            if (child instanceof THREE.Mesh) {
+              console.log('  📦 Checking mesh:', child.name || 'unnamed');
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((material: any) => {
+                if (material.map) {
+                  textureCount++;
+                  console.log('    🖼️ Found texture map for material:', material.name || 'unnamed');
+                  console.log('      - Has image:', !!material.map.image);
+                  console.log('      - Image width:', material.map.image?.width || 'NO IMAGE');
+                  console.log('      - Image height:', material.map.image?.height || 'NO IMAGE');
+                  if (material.map.image) {
+                    loadedCount++;
+                  } else {
+                    allTexturesLoaded = false;
+                    console.log('    ⏳ Texture still loading for material:', material.name || 'unnamed');
+                  }
+                } else {
+                  console.log('    ❌ No texture map found for material:', material.name || 'unnamed');
+                }
+              });
+            }
+          });
+          
+          console.log(`📊 [6] Texture status: ${loadedCount}/${textureCount} loaded`);
+          
+          if (allTexturesLoaded) {
+            console.log('✅ [7] All textures loaded!');
+            resolve(true);
+          } else {
+            console.log('⏳ [8] Still waiting for textures...');
+            setTimeout(checkTexture, 100);
+          }
+        };
+        checkTexture();
+      });
       
       // ✅ ENHANCED MODEL SETUP
       foxModel.scale.setScalar(0.01); // Scale down the model
@@ -337,15 +455,144 @@ const FoxARViewer: React.FC<FoxARViewerProps> = ({ onClose }) => {
       foxModel.receiveShadow = true;
       
       // Enable shadows for all meshes
+      console.log('🦊 [9] === PROCESSING FOX MODEL ===');
+      let meshCount = 0;
+      let materialCount = 0;
       foxModel.traverse((child: any) => {
         if (child instanceof THREE.Mesh) {
+          meshCount++;
           child.castShadow = true;
           child.receiveShadow = true;
+          
+          console.log(`📦 [9.${meshCount}] Processing mesh #${meshCount}:`, child.name || 'unnamed');
+          
+          // ✅ ENSURE TEXTURES ARE LOADED AND APPLIED
+          if (child.material) {
+            materialCount++;
+            // Handle array of materials or single material
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            
+            materials.forEach((material: any, matIndex: number) => {
+              console.log(`  🎨 [9.${meshCount}.${matIndex}] Material #${matIndex}:`);
+              console.log(`    - Type: ${material.type}`);
+              console.log(`    - Name: ${material.name || 'unnamed'}`);
+              console.log(`    - Has Map: ${!!material.map}`);
+              console.log(`    - Map Image Loaded: ${material.map ? !!material.map.image : 'NO MAP'}`);
+              if (material.map) {
+                console.log(`    - Map Image Size: ${material.map.image?.width || 0}x${material.map.image?.height || 0}`);
+                console.log(`    - Map Format: ${material.map.format}`);
+                console.log(`    - Map Type: ${material.map.type}`);
+                console.log(`    - Map Encoding: ${material.map.encoding}`);
+              }
+              console.log(`    - Color: ${material.color.getHexString()}`);
+              console.log(`    - Roughness: ${material.roughness}`);
+              console.log(`    - Metalness: ${material.metalness}`);
+              
+              // Skip if already processed
+              if (!material.isMeshStandardMaterial && material.map) {
+                console.log('  ⚠️ Non-standard material with map detected');
+              }
+              
+                             // CRITICAL: Ensure proper material settings for texture rendering
+               if (material.map) {
+                 console.log('  ✅ Texture found!');
+                 console.log('    - Image loaded:', !!material.map.image);
+                 console.log('    - Image size:', material.map.image?.width, 'x', material.map.image?.height);
+                 console.log('    - Image type:', material.map.image?.constructor.name);
+                 console.log('    - Texture format:', material.map.format);
+                 console.log('    - Texture type:', material.map.type);
+                 console.log('    - Texture encoding:', material.map.encoding);
+                 console.log('    - Texture needsUpdate:', material.map.needsUpdate);
+                 
+                 // Force texture update
+                 material.map.needsUpdate = true;
+                 material.map.flipY = false; // GLB textures are usually not flipped
+                 (material.map as any).colorSpace = 'srgb';
+                 
+                 // Ensure proper texture wrapping
+                 material.map.wrapS = THREE.RepeatWrapping;
+                 material.map.wrapT = THREE.RepeatWrapping;
+                 
+                 // Ensure proper texture filtering
+                 material.map.magFilter = THREE.LinearFilter;
+                 material.map.minFilter = THREE.LinearMipmapLinearFilter;
+                 
+                 // Set encoding for proper color space (using alternative property name)
+                 (material.map as any).colorSpace = 'srgb';
+                 
+                 // Ensure material uses the texture
+                 material.color.setHex(0xffffff);
+                 material.vertexColors = false;
+                 
+                 // Disable emissive to see texture colors
+                 material.emissive.setHex(0x000000);
+                 material.emissiveIntensity = 0;
+                 
+                 // Set proper roughness if not set
+                 if (material.roughness === undefined) {
+                   material.roughness = 0.5;
+                 }
+                 if (material.metalness === undefined) {
+                   material.metalness = 0;
+                 }
+                 
+                 // Ensure texture is being used
+                 // material.map.uvTransform = new THREE.Matrix3(); // Commented out - may cause issues
+               } else {
+                 console.log('  ⚠️ No texture map found');
+                 
+                 // ✅ ATTEMPT TO LOAD TEXTURE FROM GLTF STRUCTURE MANUALLY
+                 if (gltf.parser && gltf.parser.json) {
+                   console.log('  🔄 Attempting to load texture from GLTF structure...');
+                   
+                   const json = gltf.parser.json;
+                   if (json.images && json.images.length > 0 && json.textures && json.textures.length > 0) {
+                     console.log('  📦 Found images and textures in GLTF structure');
+                     
+                     // Get the first texture
+                     const textureData = json.textures[0];
+                     const imageData = json.images[textureData.source];
+                     
+                     console.log('  🖼️ Image data:', {
+                       mimeType: imageData.mimeType,
+                       hasBufferView: imageData.bufferView !== undefined
+                     });
+                     
+                     if (imageData.bufferView !== undefined) {
+                       console.log('  ✅ Texture is embedded in GLB, waiting for GLTFLoader...');
+                       // GLTFLoader should handle this, but force a check
+                       setTimeout(() => {
+                         if (material.map && !material.map.image) {
+                           console.log('  ⚠️ Texture still not loaded after waiting');
+                           material.color.setHex(0xffffff);
+                         }
+                       }, 500);
+                     }
+                   }
+                 }
+                 
+                 // Still set to white to avoid black rendering
+                 material.color.setHex(0xffffff);
+                 material.emissive.setHex(0x000000);
+                 material.emissiveIntensity = 0;
+               }
+              
+              // Force material update
+              material.needsUpdate = true;
+            });
+          } else {
+            console.log('  ⚠️ No material found for mesh');
+          }
         }
       });
+      console.log(`✅ [10] === FOX MODEL PROCESSING COMPLETE ===`);
+      console.log(`   📊 Total meshes processed: ${meshCount}`);
+      console.log(`   📊 Total materials processed: ${materialCount}`);
       
+      console.log(`🎭 [11] Adding fox model to scene...`);
       scene.add(foxModel);
       modelRef.current = foxModel;
+      console.log(`✅ [12] Fox model added to scene!`);
 
       // ✅ ADVANCED ANIMATION SETUP
       if (gltf.animations && gltf.animations.length > 0) {

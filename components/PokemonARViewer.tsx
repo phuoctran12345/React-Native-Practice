@@ -151,6 +151,135 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
     return Math.sqrt(dx * dx + dy * dy);
   };
 
+  // ✅ DEBUG TEXTURE LOADING
+  const debugTextureLoading = (model: THREE.Object3D) => {
+    console.log('🔍 Debugging texture loading...');
+    let textureCount = 0;
+    let meshCount = 0;
+    
+    model.traverse((child: any) => {
+      if (child.isMesh) {
+        meshCount++;
+        console.log(`📦 Mesh: ${child.name || 'unnamed'}`, {
+          material: child.material?.type || 'no material',
+          hasMap: !!child.material?.map,
+          hasNormalMap: !!child.material?.normalMap,
+          hasRoughnessMap: !!child.material?.roughnessMap,
+          hasMetalnessMap: !!child.material?.metalnessMap,
+          mapSize: child.material?.map ? `${child.material.map.image?.width}x${child.material.map.image?.height}` : 'no map',
+          mapFormat: child.material?.map?.format || 'no format'
+        });
+        
+        if (child.material?.map) {
+          textureCount++;
+          console.log('🖼️ Texture details:', {
+            width: child.material.map.image?.width,
+            height: child.material.map.image?.height,
+            format: child.material.map.format,
+            type: child.material.map.type,
+            needsUpdate: child.material.map.needsUpdate
+          });
+        }
+      }
+    });
+    
+    console.log(`📊 Texture Debug Summary: ${textureCount} textures found in ${meshCount} meshes`);
+    return { textureCount, meshCount };
+  };
+
+  // ✅ FORCE TEXTURE LOADING FROM GLTF DATA
+  const forceTextureLoading = (gltf: any, model: THREE.Object3D) => {
+    console.log('🔄 Force loading textures from GLTF data...');
+    
+    if (!gltf.textures || !gltf.images) {
+      console.log('❌ No textures or images found in GLTF');
+      return;
+    }
+    
+    // ✅ MANUALLY ASSIGN TEXTURES TO MATERIALS
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🔧 Processing mesh: ${child.name}`);
+        
+        // ✅ GET MATERIAL INDEX FROM MESH
+        const materialIndex = child.material.userData?.materialIndex || 0;
+        console.log(`🎨 Material index: ${materialIndex}`);
+        
+        // ✅ CHECK IF GLTF HAS TEXTURE DATA
+        if (gltf.textures && gltf.textures.length > 0) {
+          const textureData = gltf.textures[0]; // First texture
+          console.log(`🖼️ Texture data:`, textureData);
+          
+          if (textureData && gltf.images && gltf.images[textureData.source]) {
+            const imageData = gltf.images[textureData.source];
+            console.log(`📷 Image data:`, imageData);
+            
+            // ✅ CREATE TEXTURE FROM GLTF DATA
+            try {
+              const texture = new THREE.Texture();
+              texture.image = imageData;
+              texture.needsUpdate = true;
+              texture.flipY = false;
+              
+              // ✅ ASSIGN TO MATERIAL
+              child.material.map = texture;
+              child.material.needsUpdate = true;
+              
+              console.log(`✅ Texture assigned to mesh: ${child.name}`);
+            } catch (error) {
+              console.error(`❌ Failed to create texture for mesh: ${child.name}`, error);
+            }
+          }
+        }
+      }
+    });
+  };
+
+  // ✅ MANUAL TEXTURE LOADING FROM SEPARATE PNG FILE
+  const loadTextureFromPNG = async (model: THREE.Object3D) => {
+    console.log('🔄 Loading texture from separate PNG file...');
+    
+    try {
+      // ✅ LOAD FOX.PNG TEXTURE
+      const textureAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+      await textureAsset.downloadAsync();
+      
+      console.log('✅ Fox.png texture loaded:', textureAsset.uri);
+      
+      // ✅ CREATE THREE.JS TEXTURE
+      const texture = new THREE.Texture();
+      texture.image = textureAsset;
+      texture.needsUpdate = true;
+      texture.flipY = false;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      
+      console.log('✅ Three.js texture created');
+      
+      // ✅ ASSIGN TEXTURE TO ALL MESHES
+      model.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          console.log(`🎨 Assigning texture to mesh: ${child.name}`);
+          
+          // ✅ ASSIGN TEXTURE TO MATERIAL
+          child.material.map = texture;
+          child.material.needsUpdate = true;
+          
+          // ✅ ENSURE MATERIAL IS VISIBLE
+          child.material.transparent = false;
+          child.material.opacity = 1.0;
+          
+          console.log(`✅ Texture assigned to mesh: ${child.name}`);
+        }
+      });
+      
+      console.log('✅ All meshes updated with texture');
+      
+    } catch (error) {
+      console.error('❌ Failed to load texture from PNG:', error);
+    }
+  };
+
   // ✅ TC3.1: RAYCASTING FOR TOUCH ANIMATION TRIGGER
   const performRaycasting = (touchX: number, touchY: number, screenWidth: number, screenHeight: number) => {
     if (!modelRef.current || !cameraRef.current || !rendererRef.current) return null;
@@ -493,9 +622,59 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             await asset.downloadAsync();
           console.log('✅ Asset downloaded');
 
-          // ✅ SIMPLE GLTF LOADING
+          // ✅ SIMPLE GLTF LOADING WITH TEXTURE DEBUG
             gltf = await loadAsync(asset);
           console.log('✅ GLTF loaded successfully');
+          
+          // ✅ DEBUG GLTF STRUCTURE - CHI TIẾT HƠN
+          console.log('🔍 GLTF Structure Debug:', {
+            scenes: gltf.scenes?.length || 0,
+            animations: gltf.animations?.length || 0,
+            materials: gltf.materials?.length || 0,
+            textures: gltf.textures?.length || 0,
+            images: gltf.images?.length || 0,
+            meshes: gltf.meshes?.length || 0
+          });
+          
+          // ✅ DEBUG GLTF OBJECT KEYS
+          console.log('🔍 GLTF Object Keys:', Object.keys(gltf));
+          
+          // ✅ DEBUG SCENE CHILDREN
+          if (gltf.scene) {
+            console.log('🔍 Scene children:', gltf.scene.children?.length || 0);
+            gltf.scene.traverse((child: any) => {
+              console.log(`🔍 Scene child: ${child.name || 'unnamed'}`, {
+                type: child.type,
+                isMesh: child.isMesh,
+                material: child.material?.type || 'no material',
+                hasMap: !!child.material?.map
+              });
+            });
+          }
+          
+          // ✅ DEBUG MATERIALS
+          if (gltf.materials) {
+            gltf.materials.forEach((material: any, index: number) => {
+              console.log(`🎨 Material ${index}:`, {
+                name: material.name,
+                hasBaseColorTexture: !!material.pbrMetallicRoughness?.baseColorTexture,
+                baseColorTextureIndex: material.pbrMetallicRoughness?.baseColorTexture?.index,
+                metallicFactor: material.pbrMetallicRoughness?.metallicFactor,
+                roughnessFactor: material.pbrMetallicRoughness?.roughnessFactor
+              });
+            });
+          }
+          
+          // ✅ DEBUG TEXTURES
+          if (gltf.textures) {
+            gltf.textures.forEach((texture: any, index: number) => {
+              console.log(`🖼️ Texture ${index}:`, {
+                sampler: texture.sampler,
+                source: texture.source,
+                hasImage: !!gltf.images?.[texture.source]
+              });
+            });
+          }
 
           if (!gltf || !gltf.scene) {
             throw new Error('GLB file loaded but no scene found');
@@ -514,19 +693,52 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
           
           console.log('✅ Model setup complete');
 
-          // ✅ SIMPLE MATERIAL SETUP
-          console.log('🎨 Setting up materials...');
-                loadedModel.traverse((child: any) => {
+          // ✅ ENHANCED MATERIAL SETUP - ĐẢM BẢO TEXTURE RENDER ĐÚNG MÀU
+          console.log('🎨 Setting up materials with texture support...');
+          loadedModel.traverse((child: any) => {
             if (child.isMesh) {
               child.castShadow = true;
               child.receiveShadow = true;
 
               if (child.material) {
-                        child.material.needsUpdate = true;
-                console.log('✅ Material updated for mesh:', child.name);
-                    }
-                  }
+                // ✅ ENSURE TEXTURE LOADING
+                if (child.material.map) {
+                  child.material.map.needsUpdate = true;
+                  child.material.map.flipY = false; // ✅ FIX TEXTURE ORIENTATION
+                  console.log('✅ Texture map found and updated for mesh:', child.name);
+                }
+                
+                // ✅ ENSURE NORMAL MAP LOADING
+                if (child.material.normalMap) {
+                  child.material.normalMap.needsUpdate = true;
+                  child.material.normalMap.flipY = false;
+                  console.log('✅ Normal map found and updated for mesh:', child.name);
+                }
+                
+                // ✅ ENSURE ROUGHNESS/METALLIC MAPS
+                if (child.material.roughnessMap) {
+                  child.material.roughnessMap.needsUpdate = true;
+                  child.material.roughnessMap.flipY = false;
+                }
+                
+                if (child.material.metalnessMap) {
+                  child.material.metalnessMap.needsUpdate = true;
+                  child.material.metalnessMap.flipY = false;
+                }
+                
+                // ✅ FORCE MATERIAL UPDATE
+                child.material.needsUpdate = true;
+                child.material.transparent = false; // ✅ ENSURE OPAQUE RENDERING
+                
+                console.log('✅ Material fully updated for mesh:', child.name, {
+                  hasMap: !!child.material.map,
+                  hasNormalMap: !!child.material.normalMap,
+                  hasRoughnessMap: !!child.material.roughnessMap,
+                  hasMetalnessMap: !!child.material.metalnessMap
                 });
+              }
+            }
+          });
 
           // ✅ SIMPLE ANIMATION SETUP
           if (gltf.animations && gltf.animations.length > 0) {
@@ -561,6 +773,43 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
             // ✅ APPLY DYNAMIC SCALE SYSTEM
             console.log('📐 Applying dynamic scale system...');
             calculateOptimalScale(loadedModel);
+            
+            // ✅ FORCE TEXTURE LOADING FROM GLTF DATA
+            console.log('🔄 Force loading textures from GLTF data...');
+            forceTextureLoading(gltf, loadedModel);
+            
+            // ✅ MANUAL TEXTURE LOADING FROM SEPARATE PNG FILE
+            console.log('🔄 Loading texture from separate PNG file...');
+            await loadTextureFromPNG(loadedModel);
+            
+            // ✅ FORCE TEXTURE RELOAD AFTER MODEL IS ADDED TO SCENE
+            console.log('🔄 Forcing texture reload after scene addition...');
+            setTimeout(() => {
+              if (loadedModel) {
+                // ✅ DEBUG TEXTURE LOADING
+                debugTextureLoading(loadedModel);
+                
+                loadedModel.traverse((child: any) => {
+                  if (child.isMesh && child.material) {
+                    // ✅ FORCE ALL TEXTURES TO RELOAD
+                    if (child.material.map) {
+                      child.material.map.needsUpdate = true;
+                    }
+                    if (child.material.normalMap) {
+                      child.material.normalMap.needsUpdate = true;
+                    }
+                    if (child.material.roughnessMap) {
+                      child.material.roughnessMap.needsUpdate = true;
+                    }
+                    if (child.material.metalnessMap) {
+                      child.material.metalnessMap.needsUpdate = true;
+                    }
+                    child.material.needsUpdate = true;
+                  }
+                });
+                console.log('✅ Textures reloaded after scene addition');
+              }
+            }, 100);
             
             // ✅ SHOW GESTURE HINT KHI MODEL LOAD XONG
             console.log('🎯 Showing gesture hint for loaded model');
@@ -674,36 +923,48 @@ const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
 
       // ✅ REFERENCES ĐÃ ĐƯỢC LƯU Ở TRÊN
 
-        // ✅ ÁNH SÁNG TỐI ƯU CHO MÀU ĐỎ SCIZOR
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Tăng ambient cho màu đỏ
+        // ✅ ENHANCED LIGHTING SYSTEM - TỐI ƯU CHO TEXTURE RENDERING
+        // ✅ AMBIENT LIGHT - ĐẢM BẢO KHÔNG CÓ VÙNG TỐI HOÀN TOÀN
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
 
-      // ✅ DIRECTIONAL LIGHT CHÍNH - CHIẾU SÁNG MẠNH CHO MÀU ĐỎ
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5); // Tăng cường độ cho màu đỏ
-      directionalLight.position.set(2, 5, 3);
-      directionalLight.castShadow = true;
-      directionalLight.shadow.mapSize.width = 2048;
-      directionalLight.shadow.mapSize.height = 2048;
-      scene.add(directionalLight);
+        // ✅ MAIN DIRECTIONAL LIGHT - CHIẾU SÁNG CHÍNH
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        directionalLight.position.set(2, 4, 3);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.1;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -10;
+        directionalLight.shadow.camera.right = 10;
+        directionalLight.shadow.camera.top = 10;
+        directionalLight.shadow.camera.bottom = -10;
+        scene.add(directionalLight);
 
-      // ✅ ÁNH SÁNG BỔ SUNG CHO MÀU SẮC RÕ RÀNG
-      const leftLight = new THREE.DirectionalLight(0xffffff, 0.6);
-      leftLight.position.set(-4, 3, 3);
-      scene.add(leftLight);
+        // ✅ FILL LIGHTS - ĐẢM BẢO MÀU SẮC ĐỀU
+        const leftFillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        leftFillLight.position.set(-3, 2, 2);
+        scene.add(leftFillLight);
 
-      const rightLight = new THREE.DirectionalLight(0xffffff, 0.6);
-      rightLight.position.set(4, 3, 3);
-      scene.add(rightLight);
-      
-      // ✅ POINT LIGHT CHO CHI TIẾT
-      const pointLight = new THREE.PointLight(0xffffff, 0.8, 30);
-      pointLight.position.set(0, 3, 4);
-      scene.add(pointLight);
-      
-      // ✅ RIM LIGHT CHO WINGS
-      const rimLight = new THREE.DirectionalLight(0x88ccff, 0.5);
-      rimLight.position.set(0, 0, -5);
-      scene.add(rimLight);
+        const rightFillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        rightFillLight.position.set(3, 2, 2);
+        scene.add(rightFillLight);
+        
+        // ✅ KEY LIGHT - ÁNH SÁNG CHÍNH CHO TEXTURE
+        const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        keyLight.position.set(0, 3, 4);
+        scene.add(keyLight);
+        
+        // ✅ RIM LIGHT - TẠO ĐỘ SÂU CHO MODEL
+        const rimLight = new THREE.DirectionalLight(0x88ccff, 0.3);
+        rimLight.position.set(0, 1, -3);
+        scene.add(rimLight);
+        
+        // ✅ ADDITIONAL POINT LIGHT FOR DETAILS
+        const pointLight = new THREE.PointLight(0xffffff, 0.5, 20);
+        pointLight.position.set(0, 2, 3);
+        scene.add(pointLight);
 
       // ✅ ANIMATION LOOP - TỐI ƯU HIỆU SUẤT!
       const animate = () => {

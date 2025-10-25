@@ -1,0 +1,31 @@
+🦊 FOX MODEL TEST QR CODES
+========================
+
+1. QR Code đơn giản:
+fox
+
+2. QR Code với scale tùy chỉnh:
+{"modelId":"fox","scale":1.2}
+
+3. QR Code với position tùy chỉnh:
+{"modelId":"fox","scale":0.8,"position":{"x":0,"y":-0.3,"z":0}}
+
+4. QR Code với animations:
+{"modelId":"fox","scale":0.6,"animations":["Survey","Walk","Run"]}
+
+5. QR Code với rotation:
+{"modelId":"fox","scale":0.7,"rotation":{"x":0,"y":Math.PI/4,"z":0}}
+
+CÁCH SỬ DỤNG:
+- Quét QR code bằng camera
+- Model Fox sẽ hiển thị với texture Fox.png
+- Sử dụng cử chỉ để xoay 360 độ và zoom in/out
+- Model có 3 animations: Survey, Walk, Run
+
+TÍNH NĂNG:
+✅ Texture rendering với Fox.png
+✅ 360 độ rotation
+✅ Zoom in/out
+✅ Animations
+✅ Dynamic scaling
+✅ PBR materials

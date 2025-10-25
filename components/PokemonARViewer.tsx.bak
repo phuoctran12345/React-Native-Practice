@@ -1,0 +1,2450 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { View, StyleSheet, Text, ActivityIndicator, Alert, Dimensions, Platform, PanResponder } from 'react-native';
+import { Camera, CameraView } from 'expo-camera';
+import { GLView } from 'expo-gl';
+import { Renderer, loadAsync } from 'expo-three';
+import * as THREE from 'three';
+import { Asset } from 'expo-asset';
+// ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+import { GestureHandlerRootView, PanGestureHandler, State } from 'react-native-gesture-handler';
+import { getGLBModelFromQRData, getGLBModelConfig } from '../utils/modelData';
+
+interface PokemonARViewerProps {
+  onClose: () => void;
+}
+
+const PokemonARViewer: React.FC<PokemonARViewerProps> = ({ onClose }) => {
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [modelInfo, setModelInfo] = useState<string>('');
+  const [showDebugControls, setShowDebugControls] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>({});
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const modelRef = useRef<THREE.Object3D | null>(null);
+  const rotationRef = useRef({ x: 0, y: 0 });
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const clockRef = useRef(new THREE.Clock());
+  // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+  const [scannedData, setScannedData] = useState<string | null>(null);
+  const [currentAnimation, setCurrentAnimation] = useState<string>('idle');
+  const [animationFeedback, setAnimationFeedback] = useState<string>('');
+  const [showGestureHint, setShowGestureHint] = useState<boolean>(true);
+
+  // ✅ PANRESPONDER CHO XOAY 360 ĐỘ VÀ ZOOM - CHUYÊN NGHIỆP!
+  const [previousRotationX, setPreviousRotationX] = useState(0);
+  const [previousRotationY, setPreviousRotationY] = useState(0);
+  const [previousScale, setPreviousScale] = useState(1);
+  const [isRotating, setIsRotating] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
+
+  // ✅ PANRESPONDER CHO 3D INTERACTION - XỬ LÝ CỬ CHỈ LIÊN TỤC!
+
+  // ✅ PANRESPONDER CHO 3D INTERACTION - CHUYÊN NGHIỆP!
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => {
+      return true;
+    },
+    onMoveShouldSetPanResponder: () => {
+      return true;
+    },
+    
+    onPanResponderGrant: (evt) => {
+      // ✅ ẨN GESTURE HINT SAU KHI USER TƯƠNG TÁC
+      if (showGestureHint) {
+        setShowGestureHint(false);
+      }
+      
+      // ✅ SETUP INITIAL STATE
+      setIsRotating(true);
+      setIsZooming(false);
+    },
+    
+    onPanResponderMove: (evt, gestureState) => {
+      if (!modelRef.current) {
+        return;
+      }
+      
+      const touches = evt.nativeEvent.touches;
+      
+      if (touches.length === 1) {
+        // ✅ THUẬT TOÁN XOAY 360 ĐỘ - SINGLE TOUCH
+        const ROTATION_SENSITIVITY = 0.01;
+        const deltaX = gestureState.dx * ROTATION_SENSITIVITY;
+        const deltaY = gestureState.dy * ROTATION_SENSITIVITY;
+        
+        const currentRotationY = previousRotationY + deltaX;
+        const currentRotationX = previousRotationX + deltaY;
+        
+        // ✅ GIỚI HẠN GÓC XOAY DỌC
+        const clampedRotationX = Math.max(-Math.PI/2, Math.min(Math.PI/2, currentRotationX));
+        
+        // ✅ CẬP NHẬT MODEL
+        modelRef.current.rotation.y = currentRotationY;
+        modelRef.current.rotation.x = clampedRotationX;
+        
+      } else if (touches.length === 2) {
+        // ✅ THUẬT TOÁN ZOOM IN/OUT - MULTI TOUCH
+        const currentDistance = Math.sqrt(
+          Math.pow(touches[0].pageX - touches[1].pageX, 2) + 
+          Math.pow(touches[0].pageY - touches[1].pageY, 2)
+        );
+        
+        // Tính scale dựa trên distance (simplified)
+        const scale = Math.max(0.5, Math.min(3.0, currentDistance / 200));
+        const originalScale = (modelRef.current as any).originalScale || 0.0129265882742369;
+        const targetScale = originalScale * scale;
+        
+        // ✅ CẬP NHẬT MODEL
+        modelRef.current.scale.setScalar(targetScale);
+      }
+    },
+    
+    onPanResponderRelease: (evt) => {
+      // ✅ LƯU TRẠNG THÁI TRƯỚC ĐÓ KHI GESTURE KẾT THÚC
+        if (modelRef.current) {
+        setPreviousRotationX(modelRef.current.rotation.x);
+        setPreviousRotationY(modelRef.current.rotation.y);
+        setPreviousScale(modelRef.current.scale.x);
+      }
+      
+      setIsRotating(false);
+      setIsZooming(false);
+    }
+  });
+
+  // ✅ TC6.2: SCREEN COMPATIBILITY
+  const screenData = Dimensions.get('window');
+  const isIOS = Platform.OS === 'ios';
+  const hasNotch = screenData.height > 800; // Approximate notch detection
+
+  // ✅ HELPER FUNCTION ĐỂ TÍNH KHOẢNG CÁCH GIỮA 2 TOUCH
+  const getDistance = (touch1: any, touch2: any) => {
+    const dx = touch1.pageX - touch2.pageX;
+    const dy = touch1.pageY - touch2.pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // ✅ FORCE LOAD FOX.PNG TEXTURE - GIẢI PHÁP CUỐI CÙNG
+  const forceLoadFoxTexture = async (model: THREE.Object3D) => {
+    console.log('🦊 === LOAD FOX.PNG TEXTURE ===');
+    
+    try {
+      // ✅ BƯỚC 1: DOWNLOAD FOX.PNG ASSET TRƯỚC
+      console.log('🦊 Downloading Fox.png asset...');
+      const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+      await foxAsset.downloadAsync();
+      console.log('✅ Fox.png downloaded, URI:', foxAsset.uri);
+      
+      // ✅ BƯỚC 2: LOAD TEXTURE FROM DOWNLOADED ASSET
+      const textureLoader = new THREE.TextureLoader();
+      
+      const foxTexturePromise = new Promise<THREE.Texture>((resolve, reject) => {
+        console.log('🦊 Loading texture from URI:', foxAsset.uri);
+        
+        textureLoader.load(
+          foxAsset.uri,
+          (texture) => {
+            console.log('✅ Fox.png texture loaded successfully!');
+            
+            // ✅ SETUP TEXTURE PROPERTIES
+            texture.needsUpdate = true;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.flipY = false;
+            // @ts-ignore
+            texture.encoding = THREE.sRGBEncoding;
+            
+            resolve(texture);
+          },
+          undefined,
+          (error) => {
+            console.error('❌ Failed to load Fox.png:', error);
+            reject(error);
+          }
+        );
+      });
+      
+      const foxTexture = await foxTexturePromise;
+      
+      // ✅ BƯỚC 2: ÁP DỤNG TEXTURE CHO TẤT CẢ MESH
+      model.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          console.log(`🦊 Applying Fox.png texture to mesh: ${child.name}`);
+          
+          // ✅ CLEAR MATERIAL COLOR
+          child.material.color.setHex(0xffffff);
+          
+          // ✅ CLEAR EMISSIVE
+          child.material.emissive.setHex(0x000000);
+          child.material.emissiveIntensity = 0;
+          
+          // ✅ DISABLE VERTEX COLORS
+          child.material.vertexColors = false;
+          
+          // ✅ APPLY TEXTURE
+          child.material.map = foxTexture.clone();
+          child.material.map.needsUpdate = true;
+          
+          // ✅ FORCE UPDATE MATERIAL
+          child.material.needsUpdate = true;
+          
+          console.log('✅ Texture applied to:', child.name);
+        }
+      });
+      
+      // ✅ BƯỚC 3: THÊM ÁNH SÁNG MẠNH HƠN
+      if (sceneRef.current) {
+        // Clear existing lights
+        const lights = sceneRef.current.children.filter(child => child.type.includes('Light'));
+        lights.forEach(light => sceneRef.current?.remove(light));
+        
+        // Add bright ambient light
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+        sceneRef.current.add(ambientLight);
+        
+        // Add multiple directional lights
+        const light1 = new THREE.DirectionalLight(0xffffff, 1.0);
+        light1.position.set(5, 5, 5);
+        sceneRef.current.add(light1);
+        
+        const light2 = new THREE.DirectionalLight(0xffffff, 0.8);
+        light2.position.set(-5, 5, -5);
+        sceneRef.current.add(light2);
+        
+        const light3 = new THREE.DirectionalLight(0xffffff, 0.6);
+        light3.position.set(0, 5, 5);
+        sceneRef.current.add(light3);
+        
+        console.log('✅ Bright lighting added to scene');
+      }
+      
+      // ✅ BƯỚC 4: FORCE RENDER UPDATE
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+        console.log('✅ Force render update completed');
+      }
+      
+      console.log('🦊 === FOX.PNG TEXTURE LOAD COMPLETE ===');
+      
+    } catch (error) {
+      console.error('❌ === FOX.PNG TEXTURE LOAD FAILED ===', error);
+    }
+  };
+
+  // ✅ CREATE TEXTURE FROM PRELOADED ASSET
+  const createTextureFromAsset = async (asset: any) => {
+    try {
+      const textureLoader = new THREE.TextureLoader();
+      
+      const texture = textureLoader.load(
+        asset.uri,
+        (loadedTexture) => {
+          return loadedTexture;
+        },
+        undefined,
+        (error) => {
+          console.error('❌ Failed to create texture:', error);
+        }
+      );
+      
+      return texture;
+      } catch (error) {
+      console.error('❌ Error creating texture:', error);
+      return null;
+    }
+  };
+
+  // ✅ FORCE APPLY TEXTURE IMMEDIATELY
+  const forceApplyTexture = (model: THREE.Object3D) => {
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        try {
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+          const textureLoader = new THREE.TextureLoader();
+          
+          foxAsset.downloadAsync().then(() => {
+            const texture = textureLoader.load(
+              foxAsset.uri,
+              (loadedTexture) => {
+                // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                child.material.color.setHex(0xffffff);
+                child.material.emissive.setHex(0x000000);
+                child.material.emissiveIntensity = 0;
+                child.material.vertexColors = false;
+                
+                // ✅ FORCE APPLY TEXTURE
+                child.material.map = loadedTexture;
+                child.material.map.needsUpdate = true;
+                child.material.needsUpdate = true;
+                
+                // ✅ FORCE RENDER UPDATE FOR iOS
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                }
+                
+                console.log('🦊 Texture applied!');
+              },
+              undefined,
+              (error) => {
+                console.error('❌ Texture load failed:', error);
+              }
+            );
+          }).catch((error) => {
+            console.error('❌ Asset download failed:', error);
+          });
+    } catch (error) {
+          console.error('❌ Texture creation error:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ ALTERNATIVE TEXTURE LOADING APPROACH
+  const forceApplyTextureAlternative = (model: THREE.Object3D) => {
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        try {
+          // ✅ USE DIRECT URI APPROACH
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+      const textureLoader = new THREE.TextureLoader();
+          
+          // ✅ CREATE TEXTURE DIRECTLY
+          const texture = textureLoader.load(
+            foxAsset.uri,
+            (loadedTexture) => {
+              // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+              child.material.color.setHex(0xffffff);
+              child.material.emissive.setHex(0x000000);
+              child.material.emissiveIntensity = 0;
+              child.material.vertexColors = false;
+              
+              // ✅ FORCE APPLY TEXTURE
+              child.material.map = loadedTexture;
+              child.material.map.needsUpdate = true;
+              child.material.needsUpdate = true;
+              
+              // ✅ FORCE RENDER UPDATE FOR iOS
+              if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                rendererRef.current.render(sceneRef.current, cameraRef.current);
+                console.log('🦊 iOS: Force render update applied!');
+              }
+              
+              // ✅ DISABLE FALLBACK COLOR - FORCE TEXTURE USAGE
+              child.material.color.setHex(0xffffff); // Set to white to avoid color interference
+              child.material.emissive.setHex(0x000000); // No emissive color
+              child.material.emissiveIntensity = 0; // No emissive intensity
+              
+              // ✅ ENSURE PROPER UV MAPPING SETTINGS
+              child.material.map.wrapS = THREE.RepeatWrapping;
+              child.material.map.wrapT = THREE.RepeatWrapping;
+              child.material.map.flipY = false;
+              
+              console.log('🦊 Alternative texture applied!');
+          },
+          undefined,
+          (error) => {
+              console.error('❌ Alternative texture failed:', error);
+            }
+          );
+          
+          // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+          child.material.color.setHex(0xffffff);
+          child.material.emissive.setHex(0x000000);
+          child.material.emissiveIntensity = 0;
+          child.material.vertexColors = false;
+          
+          // ✅ FORCE APPLY TEXTURE IMMEDIATELY
+          child.material.map = texture;
+          child.material.map.needsUpdate = true;
+          child.material.needsUpdate = true;
+          
+        } catch (error) {
+          console.error('❌ Alternative texture error:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ DIRECT IMAGE LOADING APPROACH
+  const forceApplyTextureDirectImage = (model: THREE.Object3D) => {
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        
+        try {
+          // ✅ LOAD IMAGE DIRECTLY
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+          
+          foxAsset.downloadAsync().then(() => {
+            // ✅ CREATE IMAGE ELEMENT
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            img.onload = () => {
+              
+              // ✅ CREATE TEXTURE FROM IMAGE WITH PROPER SETTINGS
+              const texture = new THREE.Texture(img);
+              texture.needsUpdate = true;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.flipY = false;
+              
+              // ✅ ENSURE PROPER ENCODING
+              // @ts-ignore - encoding property for older Three.js versions
+              texture.encoding = THREE.sRGBEncoding;
+              texture.format = THREE.RGBAFormat;
+              texture.type = THREE.UnsignedByteType;
+              
+              // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+              child.material.color.setHex(0xffffff);
+              child.material.emissive.setHex(0x000000);
+              child.material.emissiveIntensity = 0;
+              child.material.vertexColors = false;
+              
+              // ✅ APPLY TEXTURE TO MATERIAL
+              child.material.map = texture;
+              child.material.map.needsUpdate = true;
+              child.material.needsUpdate = true;
+              
+              // ✅ FORCE RENDER UPDATE FOR iOS
+              if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                rendererRef.current.render(sceneRef.current, cameraRef.current);
+                console.log('🦊 iOS: Force render update applied!');
+              }
+              
+              // ✅ DISABLE FALLBACK COLOR - FORCE TEXTURE USAGE
+              child.material.color.setHex(0xffffff); // Set to white to avoid color interference
+              child.material.emissive.setHex(0x000000); // No emissive color
+              child.material.emissiveIntensity = 0; // No emissive intensity
+              
+              // ✅ FORCE MATERIAL UPDATE
+              child.material.needsUpdate = true;
+              
+              console.log('🦊 Direct texture applied!');
+              
+              // ✅ FORCE RENDER UPDATE
+              if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                rendererRef.current.render(sceneRef.current, cameraRef.current);
+              }
+            };
+            
+            img.onerror = (error) => {
+              console.error('❌ Direct: Failed to load image:', error);
+            };
+            
+            img.src = foxAsset.uri;
+          }).catch((error) => {
+            console.error('❌ Direct: Failed to download Fox.png asset:', error);
+          });
+      
+    } catch (error) {
+          console.error('❌ Direct: Error loading image:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ TEXTURE LOADER APPROACH
+  const forceApplyTextureLoader = (model: THREE.Object3D) => {
+    console.log('🦊 TextureLoader approach...');
+    
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🦊 TextureLoader approach for mesh: ${child.name}`);
+        
+        try {
+          // ✅ USE TEXTURE LOADER
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+      const textureLoader = new THREE.TextureLoader();
+          
+          foxAsset.downloadAsync().then(() => {
+            console.log('🦊 TextureLoader: Fox.png asset downloaded, loading texture...');
+            
+            // ✅ LOAD TEXTURE WITH PROPER SETTINGS
+            const texture = textureLoader.load(
+              foxAsset.uri,
+              (loadedTexture) => {
+                console.log('🦊 TextureLoader: Texture loaded successfully!');
+                console.log('🦊 TextureLoader: Texture details:', {
+                  image: loadedTexture.image,
+                  width: loadedTexture.image?.width,
+                  height: loadedTexture.image?.height,
+                  format: loadedTexture.format,
+                  type: loadedTexture.type
+                });
+                
+                // ✅ APPLY TEXTURE TO MATERIAL
+                child.material.map = loadedTexture;
+                child.material.map.needsUpdate = true;
+                child.material.needsUpdate = true;
+                
+                // ✅ ENSURE PROPER SETTINGS
+                child.material.map.wrapS = THREE.RepeatWrapping;
+                child.material.map.wrapT = THREE.RepeatWrapping;
+                child.material.map.flipY = false;
+                // @ts-ignore - encoding property for older Three.js versions
+                child.material.map.encoding = THREE.sRGBEncoding;
+                
+                console.log('🦊 TextureLoader: Texture applied successfully!');
+                console.log('🦊 TextureLoader: Material status:', {
+                  hasMap: !!child.material.map,
+                  mapNeedsUpdate: child.material.map?.needsUpdate,
+                  materialNeedsUpdate: child.material.needsUpdate
+                });
+                
+                // ✅ FORCE RENDER UPDATE
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                  console.log('🦊 TextureLoader: Force render update applied!');
+                }
+          },
+          undefined,
+          (error) => {
+                console.error('❌ TextureLoader: Failed to load texture:', error);
+              }
+            );
+            
+          }).catch((error) => {
+            console.error('❌ TextureLoader: Failed to download Fox.png asset:', error);
+          });
+          
+        } catch (error) {
+          console.error('❌ TextureLoader: Error loading texture:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ CANVAS TEXTURE APPROACH
+  const forceApplyTextureCanvas = (model: THREE.Object3D) => {
+    console.log('🦊 Canvas texture approach...');
+    
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🦊 Canvas texture approach for mesh: ${child.name}`);
+        
+        try {
+          // ✅ LOAD IMAGE AND CREATE CANVAS TEXTURE
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+          
+          foxAsset.downloadAsync().then(() => {
+            console.log('🦊 Canvas: Fox.png asset downloaded, creating canvas texture...');
+            
+            // ✅ CREATE IMAGE ELEMENT
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            img.onload = () => {
+              console.log('🦊 Canvas: Image loaded successfully!');
+              console.log('🦊 Canvas: Image details:', {
+                width: img.width,
+                height: img.height,
+                complete: img.complete
+              });
+              
+              // ✅ CREATE CANVAS TEXTURE
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                console.log('🦊 Canvas: Canvas created with image data');
+                
+                // ✅ CREATE TEXTURE FROM CANVAS
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.needsUpdate = true;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.flipY = false;
+                
+                // ✅ ENSURE PROPER ENCODING
+                // @ts-ignore - encoding property for older Three.js versions
+                texture.encoding = THREE.sRGBEncoding;
+                texture.format = THREE.RGBAFormat;
+                texture.type = THREE.UnsignedByteType;
+                
+                // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                child.material.color.setHex(0xffffff);
+                child.material.emissive.setHex(0x000000);
+                child.material.emissiveIntensity = 0;
+                child.material.vertexColors = false;
+                
+                // ✅ APPLY TEXTURE TO MATERIAL
+                child.material.map = texture;
+                child.material.map.needsUpdate = true;
+                child.material.needsUpdate = true;
+                
+                // ✅ FORCE RENDER UPDATE FOR iOS
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                  console.log('🦊 iOS: Force render update applied!');
+                }
+                
+                // ✅ FORCE RENDER UPDATE FOR iOS
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                  console.log('🦊 iOS: Force render update applied!');
+                }
+                
+                // ✅ FORCE MATERIAL UPDATE
+                child.material.needsUpdate = true;
+                
+                console.log('🦊 Canvas: Texture applied successfully!');
+                console.log('🦊 Canvas: Material status:', {
+                  hasMap: !!child.material.map,
+                  mapNeedsUpdate: child.material.map?.needsUpdate,
+                  materialNeedsUpdate: child.material.needsUpdate
+                });
+                
+                // ✅ FORCE RENDER UPDATE
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                  console.log('🦊 Canvas: Force render update applied!');
+                }
+      } else {
+                console.error('❌ Canvas: Failed to get canvas context');
+              }
+            };
+            
+            img.onerror = (error) => {
+              console.error('❌ Canvas: Failed to load image:', error);
+            };
+            
+            img.src = foxAsset.uri;
+          }).catch((error) => {
+            console.error('❌ Canvas: Failed to download Fox.png asset:', error);
+          });
+          
+    } catch (error) {
+          console.error('❌ Canvas: Error loading texture:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ DATA TEXTURE APPROACH
+  const forceApplyTextureData = (model: THREE.Object3D) => {
+    console.log('🦊 Data texture approach...');
+    
+    model.traverse((child: any) => {
+          if (child.isMesh && child.material) {
+        console.log(`🦊 Data texture approach for mesh: ${child.name}`);
+        
+        try {
+          // ✅ LOAD IMAGE AND CREATE DATA TEXTURE
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+          
+          foxAsset.downloadAsync().then(() => {
+            console.log('🦊 Data: Fox.png asset downloaded, creating data texture...');
+            
+            // ✅ CREATE IMAGE ELEMENT
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            img.onload = () => {
+              console.log('🦊 Data: Image loaded successfully!');
+              console.log('🦊 Data: Image details:', {
+                width: img.width,
+                height: img.height,
+                complete: img.complete
+              });
+              
+              // ✅ CREATE CANVAS TO GET IMAGE DATA
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                console.log('🦊 Data: Canvas created with image data');
+                
+                // ✅ GET IMAGE DATA FROM CANVAS
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                console.log('🦊 Data: Image data extracted:', {
+                  width: imageData.width,
+                  height: imageData.height,
+                  dataLength: imageData.data.length
+                });
+                
+                // ✅ CREATE DATA TEXTURE FROM IMAGE DATA
+                const texture = new THREE.DataTexture(
+                  imageData.data,
+                  imageData.width,
+                  imageData.height,
+                  THREE.RGBAFormat
+                );
+                
+                texture.needsUpdate = true;
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.flipY = false;
+                
+                // ✅ ENSURE PROPER ENCODING
+                // @ts-ignore - encoding property for older Three.js versions
+                texture.encoding = THREE.sRGBEncoding;
+                texture.type = THREE.UnsignedByteType;
+                
+                // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                child.material.color.setHex(0xffffff);
+                child.material.emissive.setHex(0x000000);
+                child.material.emissiveIntensity = 0;
+                child.material.vertexColors = false;
+                
+                // ✅ APPLY TEXTURE TO MATERIAL
+                child.material.map = texture;
+                child.material.map.needsUpdate = true;
+            child.material.needsUpdate = true;
+                
+                // ✅ FORCE MATERIAL UPDATE
+                child.material.needsUpdate = true;
+                
+                console.log('🦊 Data: Texture applied successfully!');
+                console.log('🦊 Data: Material status:', {
+                  hasMap: !!child.material.map,
+                  mapNeedsUpdate: child.material.map?.needsUpdate,
+                  materialNeedsUpdate: child.material.needsUpdate
+                });
+                
+                // ✅ FORCE RENDER UPDATE
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                  rendererRef.current.render(sceneRef.current, cameraRef.current);
+                  console.log('🦊 Data: Force render update applied!');
+                }
+      } else {
+                console.error('❌ Data: Failed to get canvas context');
+              }
+            };
+            
+            img.onerror = (error) => {
+              console.error('❌ Data: Failed to load image:', error);
+            };
+            
+            img.src = foxAsset.uri;
+          }).catch((error) => {
+            console.error('❌ Data: Failed to download Fox.png asset:', error);
+          });
+          
+        } catch (error) {
+          console.error('❌ Data: Error loading texture:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ FIXED SYNCHRONOUS TEXTURE LOADING - SỬA LỖI ARRAYBUFFER BLOB
+  const forceApplyTextureSynchronous = (model: THREE.Object3D) => {
+    console.log('🦊 Sync: Loading texture with ArrayBuffer fix...');
+    
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🦊 Sync: Processing mesh: ${child.name}`);
+        
+        try {
+          // ✅ LOAD IMAGE SYNCHRONOUSLY
+          const foxAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+          
+          foxAsset.downloadAsync().then(() => {
+            console.log('🦊 Sync: Asset downloaded, creating texture...');
+            
+            // ✅ CREATE IMAGE ELEMENT
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            // ✅ WAIT FOR IMAGE TO LOAD COMPLETELY
+            img.onload = () => {
+              console.log('🦊 Sync: Image loaded successfully!');
+              
+              // ✅ WAIT FOR IMAGE TO BE FULLY LOADED
+              if (img.complete && img.width > 0 && img.height > 0) {
+                console.log('🦊 Sync: Image data is fully ready!');
+                
+                // ✅ CREATE CANVAS TO GET IMAGE DATA
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                
+                if (ctx) {
+                  // ✅ DRAW IMAGE TO CANVAS
+                  ctx.drawImage(img, 0, 0);
+                  console.log('🦊 Sync: Canvas created with image data');
+                  
+                  // ✅ GET IMAGE DATA FROM CANVAS
+                  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                  console.log('🦊 Sync: Image data extracted, length:', imageData.data.length);
+                  
+                  // ✅ VERIFY IMAGE DATA HAS CONTENT
+                  if (imageData.data.length > 0) {
+                    console.log('🦊 Sync: Fox.png texture data found, creating texture...');
+                    
+                    // ✅ VERIFY FOX.PNG TEXTURE DATA
+                    const hasValidData = imageData.data.some((value, index) => index % 4 === 0 && value > 0);
+                    if (!hasValidData) {
+                      console.error('❌ Sync: Fox.png texture data is empty or invalid');
+                      return;
+                    }
+                    console.log('🦊 Sync: ✅ Fox.png texture data is valid!');
+                    
+                    // ✅ CREATE DATA TEXTURE FROM FOX.PNG IMAGE DATA
+                    const texture = new THREE.DataTexture(
+                      imageData.data,
+                      imageData.width,
+                      imageData.height,
+                      THREE.RGBAFormat
+                    );
+                    
+                    // ✅ SETUP FOX.PNG TEXTURE PROPERTIES
+                    texture.needsUpdate = true;
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    texture.flipY = false;
+                    
+                    // ✅ ENSURE PROPER ENCODING FOR FOX.PNG
+                    // @ts-ignore - encoding property for older Three.js versions
+                    texture.encoding = THREE.sRGBEncoding;
+                    texture.type = THREE.UnsignedByteType;
+                    
+                    console.log('🦊 Sync: ✅ Fox.png texture created successfully!');
+                    
+                    // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                    child.material.color.setHex(0xffffff);
+                    child.material.emissive.setHex(0x000000);
+                    child.material.emissiveIntensity = 0;
+                    child.material.vertexColors = false;
+                    
+                    // ✅ APPLY TEXTURE TO MATERIAL
+                    child.material.map = texture;
+                    child.material.map.needsUpdate = true;
+                    child.material.needsUpdate = true;
+                    
+                    console.log('🦊 Sync: ✅ Material connected to Fox.png texture successfully!');
+                    
+                    // ✅ FORCE RENDER UPDATE
+                    if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                      rendererRef.current.render(sceneRef.current, cameraRef.current);
+                      console.log('🦊 Sync: ✅ Fox.png texture rendered successfully!');
+                    }
+                    
+                  } else {
+                    console.error('❌ Sync: Image data is empty');
+                  }
+                } else {
+                  console.error('❌ Sync: Failed to get canvas context');
+                }
+              } else {
+                console.error('❌ Sync: Image not fully loaded');
+              }
+            };
+            
+            img.onerror = (error) => {
+              console.error('❌ Sync: Failed to load image:', error);
+            };
+            
+            img.src = foxAsset.uri;
+          }).catch((error) => {
+            console.error('❌ Sync: Failed to download Fox.png asset:', error);
+          });
+          
+        } catch (error) {
+          console.error('❌ Sync: Error loading texture:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ NEW: BYPASS ARRAYBUFFER BLOB ERROR - LOAD TEXTURE DIRECTLY FROM GLTF PARSER
+  const forceLoadTextureFromGLTFParser = (model: THREE.Object3D, gltf: any) => {
+    console.log('🦊 Parser: Loading texture directly from GLTF parser...');
+    
+    if (!gltf || !gltf.parser) {
+      console.error('❌ Parser: No GLTF parser available');
+      return;
+    }
+    
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🦊 Parser: Processing mesh: ${child.name}`);
+        
+        try {
+          // ✅ ACCESS GLTF PARSER JSON DIRECTLY
+          const parser = gltf.parser;
+          const json = parser.json;
+          
+          if (json && json.materials && json.materials.length > 0) {
+            const material = json.materials[0];
+            console.log('🦊 Parser: Found material:', material);
+            
+            if (material.pbrMetallicRoughness && material.pbrMetallicRoughness.baseColorTexture) {
+              const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+              console.log('🦊 Parser: Texture index:', textureIndex);
+              
+              if (json.textures && json.textures[textureIndex]) {
+                const texture = json.textures[textureIndex];
+                console.log('🦊 Parser: Found texture:', texture);
+                
+                if (json.images && json.images[texture.source]) {
+                  const image = json.images[texture.source];
+                  console.log('🦊 Parser: Found image:', image);
+                  
+                  // ✅ BYPASS SOURCE CACHE ERROR - LOAD DIRECTLY FROM BUFFER
+                  if (parser.extensions && parser.extensions.KHR_binary_glTF) {
+                    const binaryGLTF = parser.extensions.KHR_binary_glTF;
+                    console.log('🦊 Parser: Found binary GLTF body');
+                    
+                    if (binaryGLTF.body && binaryGLTF.body.byteLength > 0) {
+                      console.log('🦊 Parser: Binary body size:', binaryGLTF.body.byteLength);
+                      
+                      // ✅ GET BUFFER VIEW FOR IMAGE
+                      if (json.bufferViews && json.bufferViews[image.bufferView]) {
+                        const bufferView = json.bufferViews[image.bufferView];
+                        console.log('🦊 Parser: Buffer view:', bufferView);
+                        
+                        // ✅ EXTRACT IMAGE DATA FROM BUFFER
+                        const imageData = new Uint8Array(
+                          binaryGLTF.body,
+                          bufferView.byteOffset,
+                          bufferView.byteLength
+                        );
+                        
+                        console.log('🦊 Parser: Extracted image data, length:', imageData.length);
+                        
+                        // ✅ CREATE TEXTURE FROM EXTRACTED DATA
+                        // ✅ FIX: Calculate proper dimensions for PNG data
+                        const imageWidth = Math.sqrt(imageData.length / 4); // Approximate square texture
+                        const imageHeight = imageWidth;
+                        
+                        const textureFromBuffer = new THREE.DataTexture(
+                          imageData,
+                          imageWidth,
+                          imageHeight,
+                          THREE.RGBAFormat
+                        );
+                        
+                        textureFromBuffer.needsUpdate = true;
+                        textureFromBuffer.wrapS = THREE.RepeatWrapping;
+                        textureFromBuffer.wrapT = THREE.RepeatWrapping;
+                        textureFromBuffer.flipY = false;
+                        
+                        // ✅ ENSURE PROPER ENCODING
+                        // @ts-ignore
+                        textureFromBuffer.encoding = THREE.sRGBEncoding;
+                        textureFromBuffer.type = THREE.UnsignedByteType;
+                        
+                        // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                        child.material.color.setHex(0xffffff);
+                        child.material.emissive.setHex(0x000000);
+                        child.material.emissiveIntensity = 0;
+                        child.material.vertexColors = false;
+                        
+                        // ✅ APPLY TEXTURE TO MATERIAL
+                        child.material.map = textureFromBuffer;
+                        child.material.map.needsUpdate = true;
+                        child.material.needsUpdate = true;
+                        
+                        console.log('🦊 Parser: ✅ Texture applied from GLTF parser buffer!');
+                        
+                        // ✅ FORCE RENDER UPDATE
+                        if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                          rendererRef.current.render(sceneRef.current, cameraRef.current);
+                          console.log('🦊 Parser: ✅ Texture rendered successfully!');
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('❌ Parser: Error loading texture from GLTF parser:', error);
+        }
+      }
+    });
+  };
+
+  // ✅ DEBUG TEXTURE LOADING - ENHANCED FOR FOX.PNG WITH UV MAPPING
+  const debugTextureLoading = (model: THREE.Object3D) => {
+    console.log('🔍 Debugging texture loading for model...');
+    console.log('🦊 Looking for Fox.png texture rendering with UV mapping...');
+    
+    model.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        console.log(`🎨 Mesh: ${child.name}`, {
+          materialType: child.material.type,
+          hasMap: !!child.material.map,
+          hasNormalMap: !!child.material.normalMap,
+          hasRoughnessMap: !!child.material.roughnessMap,
+          hasMetallicMap: !!child.material.metalnessMap,
+          hasAOMap: !!child.material.aoMap,
+          hasEmissiveMap: !!child.material.emissiveMap,
+          color: child.material.color,
+          roughness: child.material.roughness,
+          metalness: child.material.metalness,
+          transparent: child.material.transparent,
+          opacity: child.material.opacity
+        });
+        
+        // ✅ CHECK UV COORDINATES
+        if (child.geometry && child.geometry.attributes) {
+          const uvAttribute = child.geometry.attributes.uv;
+          if (uvAttribute) {
+            console.log('✅ UV coordinates found:', {
+              count: uvAttribute.count,
+              itemSize: uvAttribute.itemSize,
+              array: uvAttribute.array?.length || 0
+            });
+          } else {
+            console.log('⚠️ No UV coordinates found for mesh:', child.name);
+          }
+        }
+        
+        // ✅ FORCE TEXTURE UPDATE
+        if (child.material.map) {
+          child.material.map.needsUpdate = true;
+          console.log('✅ Base texture map updated');
+          console.log('🦊 Fox.png texture should be visible now!');
+          
+          // ✅ LOG TEXTURE DETAILS
+          console.log('🦊 Texture details:', {
+            image: child.material.map.image,
+            width: child.material.map.image?.width,
+            height: child.material.map.image?.height,
+            format: child.material.map.format,
+            type: child.material.map.type,
+            wrapS: child.material.map.wrapS,
+            wrapT: child.material.map.wrapT,
+            minFilter: child.material.map.minFilter,
+            magFilter: child.material.map.magFilter
+          });
+        } else {
+          console.log('⚠️ No texture map found - attempting force load...');
+          // ✅ FORCE LOAD FOX.PNG IF NO TEXTURE FOUND - ASYNC CALL
+          forceLoadFoxTexture(model).catch(err => {
+            console.error('Failed to load Fox texture:', err);
+          });
+        }
+        
+        if (child.material.normalMap) {
+          child.material.normalMap.needsUpdate = true;
+          console.log('✅ Normal map updated');
+        }
+        
+        if (child.material.roughnessMap) {
+          child.material.roughnessMap.needsUpdate = true;
+          console.log('✅ Roughness map updated');
+        }
+        
+        if (child.material.metalnessMap) {
+          child.material.metalnessMap.needsUpdate = true;
+          console.log('✅ Metallic map updated');
+        }
+        
+        // ✅ LOG COLOR RENDERING
+        console.log('🦊 Color rendering info:', {
+          baseColor: child.material.color,
+          emissive: child.material.emissive,
+          emissiveIntensity: child.material.emissiveIntensity,
+          envMapIntensity: child.material.envMapIntensity,
+          combine: child.material.combine
+        });
+      }
+    });
+  };
+
+  // ✅ TC3.1: RAYCASTING FOR TOUCH ANIMATION TRIGGER
+  const performRaycasting = (touchX: number, touchY: number, screenWidth: number, screenHeight: number) => {
+    if (!modelRef.current || !cameraRef.current || !rendererRef.current) return null;
+
+    // Convert screen coordinates to normalized device coordinates (-1 to +1)
+    const mouse = new THREE.Vector2();
+    mouse.x = (touchX / screenWidth) * 2 - 1;
+    mouse.y = -(touchY / screenHeight) * 2 + 1;
+
+    // Create raycaster
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, cameraRef.current);
+
+    // Check intersection with model
+    const intersects = raycaster.intersectObject(modelRef.current, true);
+
+    if (intersects.length > 0) {
+      console.log('🎯 Model touched! Triggering animation...');
+      return intersects[0];
+    }
+    return null;
+  };
+
+  // ✅ TC3.1: TRIGGER ANIMATION ON TOUCH
+  const triggerTouchAnimation = (animationName: string = 'hit') => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+
+    if (clips.length > 0) {
+      // Find animation clip
+      const clip = clips.find((c: any) =>
+        c.name?.toLowerCase().includes(animationName.toLowerCase())
+      ) || clips[Math.floor(Math.random() * clips.length)]; // Random if not found
+
+      // Stop current action and play new one
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(clip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+
+      setCurrentAnimation(animationName);
+      setAnimationFeedback(`🎯 ${animationName.toUpperCase()}!`);
+      console.log(`🎬 Playing touch animation: ${clip.name || animationName}`);
+
+      // Clear feedback after short time
+      setTimeout(() => setAnimationFeedback(''), 1000);
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, clip.duration * 1000 || 2000);
+    }
+  };
+
+  // ✅ TC3.2: SWIPE GESTURE DETECTION AND THROW ANIMATION
+  const detectSwipeGesture = (startX: number, startY: number, endX: number, endY: number, duration: number) => {
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    const velocity = distance / duration; // pixels per ms
+
+    // Swipe thresholds
+    const minDistance = 100; // minimum swipe distance
+    const minVelocity = 0.5; // minimum swipe velocity
+
+    if (distance > minDistance && velocity > minVelocity) {
+      // Determine swipe direction
+      const angle = Math.atan2(deltaY, deltaX);
+      const direction = {
+        horizontal: Math.abs(deltaX) > Math.abs(deltaY),
+        vertical: Math.abs(deltaY) > Math.abs(deltaX),
+        right: deltaX > 0,
+        left: deltaX < 0,
+        up: deltaY < 0,
+        down: deltaY > 0
+      };
+
+      console.log(`🏐 Swipe detected! Distance: ${distance.toFixed(2)}, Velocity: ${velocity.toFixed(2)}, Direction:`, direction);
+
+      // Trigger throw animation based on direction
+      if (direction.horizontal) {
+        triggerThrowAnimation(direction.right ? 'throw_right' : 'throw_left', velocity);
+      } else if (direction.vertical) {
+        triggerThrowAnimation(direction.up ? 'throw_up' : 'throw_down', velocity);
+      }
+
+      return true;
+    }
+    return false;
+  };
+
+  // ✅ TC3.2: TRIGGER THROW ANIMATION
+  const triggerThrowAnimation = (throwType: string, velocity: number) => {
+    if (!mixerRef.current || !modelRef.current) return;
+
+    const anyModel = modelRef.current as any;
+    const clips = anyModel.animations || [];
+
+    if (clips.length > 0) {
+      // Find throw animation or use attack/fly animation
+      const throwClip = clips.find((c: any) =>
+        c.name?.toLowerCase().includes('attack') ||
+        c.name?.toLowerCase().includes('fly') ||
+        c.name?.toLowerCase().includes('jump')
+      ) || clips[Math.floor(Math.random() * clips.length)];
+
+      // Stop current action and play throw animation
+      mixerRef.current.stopAllAction();
+      const action = mixerRef.current.clipAction(throwClip);
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+
+      // Adjust playback speed based on swipe velocity
+      const speedMultiplier = Math.min(Math.max(velocity / 2, 0.5), 3.0);
+      action.setEffectiveTimeScale(speedMultiplier);
+      action.play();
+
+      setCurrentAnimation(throwType);
+      setAnimationFeedback(`🏐 ${throwType.replace('_', ' ').toUpperCase()}!`);
+      console.log(`🎬 Playing throw animation: ${throwClip.name || throwType} (speed: ${speedMultiplier.toFixed(2)}x)`);
+
+      // Clear feedback after animation
+      setTimeout(() => setAnimationFeedback(''), 1500);
+
+      // Add visual feedback - temporary scale effect
+      if (modelRef.current) {
+        const originalScale = (modelRef.current as any).originalScale || 0.6;
+        const scaleEffect = originalScale * (1 + velocity * 0.1);
+        modelRef.current.scale.setScalar(scaleEffect);
+
+        // Return to normal scale
+        setTimeout(() => {
+          if (modelRef.current) {
+            modelRef.current.scale.setScalar(originalScale);
+          }
+        }, 200);
+      }
+
+      // Return to idle after animation
+      setTimeout(() => {
+        if (mixerRef.current) {
+          const idleClip = clips.find((c: any) => c.name?.toLowerCase().includes('idle')) || clips[0];
+          const idleAction = mixerRef.current.clipAction(idleClip);
+          idleAction.reset();
+          idleAction.play();
+          setCurrentAnimation('idle');
+        }
+      }, (throwClip.duration * 1000 / speedMultiplier) || 1500);
+    }
+  };
+
+  // ✅ TOUCH HANDLERS ĐÃ ĐƯỢC THAY THẾ BẰNG PANRESPONDER
+
+  const onHandlerStateChange = (event: any) => {
+    if (event.nativeEvent.state === State.END) {
+      if (modelRef.current) {
+        const { velocityX } = event.nativeEvent;
+        const momentum = velocityX * 0.001; // ✅ MOMENTUM MƯỢT MÀ CHO 360 ĐỘ
+
+        // ✅ THÊM MOMENTUM SAU KHI THẢ TAY
+        modelRef.current.rotation.y += momentum;
+
+        // ✅ RESET FLAG SAU 2 GIÂY
+        setTimeout(() => {
+          if (modelRef.current) {
+            (modelRef.current as any).isUserRotating = false;
+            // console.log(`🔄 Auto rotation resumed`); // ❌ BỚT LOG
+          }
+        }, 2000);
+
+        // console.log(`🚀 Momentum applied: ${momentum}, Final rotation: ${modelRef.current.rotation.y}`); // ❌ BỚT LOG
+      }
+    }
+  };
+
+  useEffect(() => {
+    requestCameraPermission();
+
+    // ✅ PRELOAD MODELS NGAY KHI KHỞI ĐỘNG APP
+    preloadModels();
+
+    // ✅ KHÔNG AUTO-HIDE NGAY - CHỜ MODEL LOAD XONG
+    // Auto-hide sẽ được set trong loadPokemonModel
+
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      // ✅ KHÔNG CLEAR HINT TIMEOUT Ở ĐÂY NỮA
+    };
+  }, []);
+
+  // ✅ PRELOAD MODELS FOR INSTANT LOADING
+  const preloadModels = async () => {
+    try {
+      console.log('⚡ Preloading models for instant access...');
+
+      // ✅ PRELOAD SCIZOR MODEL - DIRECT LOADING
+      try {
+        const scizorModuleId = require('../assets/models/pokemon_scizor.glb');
+        console.log('✅ Scizor model preloaded! ModuleId:', scizorModuleId);
+      } catch (error) {
+        console.log('⚠️ Scizor preload failed:', error);
+      }
+
+      // ✅ PRELOAD FOX MODEL - DIRECT LOADING
+      try {
+        const foxModuleId = require('../assets/models/Fox.glb');
+        console.log('✅ Fox model preloaded! ModuleId:', foxModuleId);
+      } catch (error) {
+        console.log('⚠️ Fox preload failed:', error);
+      }
+
+      // ✅ PRELOAD FOX.PNG TEXTURE
+      try {
+        const foxTextureAsset = Asset.fromModule(require('../assets/models/Fox.png'));
+        await foxTextureAsset.downloadAsync();
+        console.log('✅ Fox.png texture preloaded! URI:', foxTextureAsset.uri);
+      } catch (error) {
+        console.log('⚠️ Fox.png texture preload failed:', error);
+      }
+
+    } catch (error) {
+      console.log('⚠️ Preload failed, will load on demand:', error);
+    }
+  };
+
+  const requestCameraPermission = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    setHasPermission(status === 'granted');
+    console.log('📷 Camera permission:', status === 'granted' ? 'GRANTED' : 'DENIED');
+  };
+
+
+  // Handle QR Code scan
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+    console.log('🎯 QR Code scanned successfully:', data);
+    setScannedData(data);
+    loadPokemonModel(data);
+  };
+
+  // ✅ DYNAMIC SCALE SYSTEM - HỆ THỐNG SCALE TỰ ĐỘNG
+  const calculateOptimalScale = (model: THREE.Object3D) => {
+    console.log('📐 Calculating optimal scale for model...');
+    
+    // ✅ BƯỚC 1: LẤY KÍCH THƯỚC MODEL (BOUNDING BOX)
+    const box = new THREE.Box3().setFromObject(model);
+          const size = box.getSize(new THREE.Vector3());
+          const maxDimension = Math.max(size.x, size.y, size.z);
+
+          console.log('📏 Model bounding box:', {
+            width: size.x,
+            height: size.y,
+            depth: size.z,
+            maxDimension: maxDimension
+          });
+
+    // ✅ BƯỚC 2: TÍNH SCALE DỰA TRÊN MÀN HÌNH
+    const screenHeight = Dimensions.get('window').height;
+    const screenWidth = Dimensions.get('window').width;
+    const aspectRatio = screenWidth / screenHeight;
+    
+          // ✅ MỤC TIÊU: MODEL CHIẾM 100% KÍCH THƯỚC TỰ NHIÊN
+          const targetScreenSize = 2.0; // 200% - giảm kích thước để model vừa phải
+          const optimalScale = targetScreenSize / maxDimension;
+
+    // ✅ DEBUG: SCALE CALCULATION
+    console.log('🎯 Scale calculation:', {
+            targetScreenSize,
+            maxDimension,
+      calculatedScale: optimalScale,
+      screenSize: { width: screenWidth, height: screenHeight, aspectRatio }
+    });
+    
+          // ✅ BƯỚC 3: ÁP DỤNG SCALE VÀ SETUP ZOOM LIMITS
+          model.scale.setScalar(optimalScale);
+          model.position.set(0, -0.1, 0);
+          
+          // ✅ DEBUG: LOG SCALE CUỐI CÙNG
+          console.log('🎯 Final scale applied:', {
+            scale: model.scale,
+            position: model.position,
+            boundingBox: { width: size.x, height: size.y, depth: size.z }
+          });
+          
+          // ✅ STORE SCALE INFO FOR ZOOM LIMITS
+          (model as any).originalScale = optimalScale;
+          (model as any).minScale = optimalScale * 0.5;  // ✅ MIN: 50% của original
+          (model as any).maxScale = optimalScale * 3.0;  // ✅ MAX: 300% của original
+    
+    console.log('✅ Dynamic scale applied:', {
+      originalScale: optimalScale,
+      minScale: optimalScale * 0.5,
+      maxScale: optimalScale * 3.0,
+      position: model.position
+    });
+    
+    return optimalScale;
+  };
+
+  // ✅ SIMPLIFIED MODEL LOADING - CHỈ LOAD MODEL THẬT, KHÔNG FALLBACK
+  const loadPokemonModel = async (qrData: string) => {
+    try {
+      console.log('🎯 Starting REAL model loading for:', qrData);
+      setIsLoading(true);
+      setLoadingProgress(10);
+      setModelInfo('Đang phân tích QR code...');
+
+      // Parse QR data để lấy model config
+      const glbConfig = getGLBModelFromQRData(qrData);
+
+      if (glbConfig) {
+        console.log('✅ Model config found:', glbConfig.name, 'File:', glbConfig.filePath);
+        setModelInfo(`🦊 Đang tải model GLB: ${glbConfig.name}...`);
+        setLoadingProgress(30);
+
+        // ✅ SIMPLIFIED MODEL LOADING - DIRECT APPROACH
+        console.log('🎯 Using simplified model loading approach');
+          setLoadingProgress(40);
+          setModelInfo(`📥 Đang tải file GLB: ${glbConfig.name}...`);
+
+        let asset: any;
+        let gltf: any;
+
+        try {
+          // ✅ SIMPLE ASSET LOADING
+          console.log('🔍 Loading asset for:', glbConfig.filePath);
+
+            if (glbConfig.filePath === 'assets/models/pokemon_scizor.glb') {
+            asset = Asset.fromModule(require('../assets/models/pokemon_scizor.glb'));
+            } else if (glbConfig.filePath === 'assets/models/Fox.glb') {
+            asset = Asset.fromModule(require('../assets/models/Fox.glb'));
+                  } else {
+              throw new Error(`Unknown model filePath: ${glbConfig.filePath}`);
+            }
+
+          console.log('✅ Asset created:', asset.uri);
+            await asset.downloadAsync();
+          console.log('✅ Asset downloaded');
+
+          // ✅ SIMPLE GLTF LOADING
+            gltf = await loadAsync(asset);
+          console.log('✅ GLTF loaded successfully');
+          
+          // ✅ DEBUG: KIỂM TRA GLTF LOADER RESULT
+          console.log('🔍 GLTF Loader Result:');
+          console.log('  - gltf type:', typeof gltf);
+          console.log('  - gltf keys:', Object.keys(gltf));
+          console.log('  - gltf.scene type:', typeof gltf.scene);
+          console.log('  - gltf.scene children:', gltf.scene?.children?.length || 0);
+          console.log('🦊 GLTF structure:', {
+            scene: !!gltf.scene,
+            animations: gltf.animations?.length || 0,
+            scenes: gltf.scenes?.length || 0,
+            materials: gltf.materials?.length || 0,
+            textures: gltf.textures?.length || 0,
+            images: gltf.images?.length || 0
+          });
+          
+          // ✅ DEBUG: KIỂM TRA CHI TIẾT GLTF STRUCTURE
+          console.log('🔍 GLTF Debug - Materials:', gltf.materials);
+          console.log('🔍 GLTF Debug - Textures:', gltf.textures);
+          console.log('🔍 GLTF Debug - Images:', gltf.images);
+          
+          // ✅ DEBUG: KIỂM TRA GLTF STRUCTURE CHI TIẾT
+          console.log('🔍 GLTF Structure Analysis:');
+          console.log('  - Scene:', !!gltf.scene);
+          console.log('  - Materials count:', gltf.materials?.length || 0);
+          console.log('  - Textures count:', gltf.textures?.length || 0);
+          console.log('  - Images count:', gltf.images?.length || 0);
+          console.log('  - Animations count:', gltf.animations?.length || 0);
+          
+          // ✅ DEBUG: KIỂM TRA GLTF PARSER SOURCE CACHE ERROR
+          if (gltf.parser && gltf.parser.sourceCache) {
+            console.log('🔍 GLTF Parser Source Cache Error:');
+            console.log('  - sourceCache:', gltf.parser.sourceCache);
+            console.log('  - ArrayBuffer blob error detected - using bypass method');
+          }
+
+          if (!gltf || !gltf.scene) {
+            throw new Error('GLB file loaded but no scene found');
+          }
+
+          const loadedModel = gltf.scene;
+          console.log('🎉 MODEL LOADED!', {
+            children: loadedModel.children?.length || 0,
+            animations: gltf.animations?.length || 0
+          });
+
+          // ✅ SIMPLE MODEL SETUP
+          console.log('🔧 Setting up model...');
+          
+          // ✅ SCALE WILL BE CALCULATED BY calculateOptimalScale() LATER
+          
+          console.log('✅ Model setup complete');
+
+          // ✅ PROPER UV MAPPING SETUP - TUÂN THEO NGUYÊN TẮC UV MAPPING
+          console.log('🎨 Setting up materials with proper UV mapping...');
+          console.log('🦊 Setting up Fox.png texture rendering with UV mapping...');
+          
+          // ✅ BƯỚC 1: KIỂM TRA GLTF STRUCTURE CHO UV MAPPING
+          console.log('🗺️ Checking GLTF structure for UV mapping...');
+          console.log('🦊 GLTF structure:', {
+            textures: gltf.textures?.length || 0,
+            materials: gltf.materials?.length || 0,
+            images: gltf.images?.length || 0,
+            scenes: gltf.scenes?.length || 0
+          });
+          
+          // ✅ BƯỚC 2: KIỂM TRA UV COORDINATES (TEXCOORD_0) - TRIỂN KHAI THEO LUỒNG CHUẨN
+          console.log('🔍 GLTF Scene Children Analysis:');
+          console.log('  - Scene children count:', gltf.scene?.children?.length || 0);
+          console.log('  - Scene children:', gltf.scene?.children);
+
+              loadedModel.traverse((child: any) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+
+              console.log(`🗺️ Checking UV mapping for mesh: ${child.name}`);
+              
+              // ✅ KIỂM TRA UV COORDINATES
+              if (child.geometry && child.geometry.attributes) {
+                const uvAttribute = child.geometry.attributes.uv;
+                if (uvAttribute) {
+                  console.log('✅ UV coordinates found:', {
+                    count: uvAttribute.count,
+                    itemSize: uvAttribute.itemSize,
+                    array: uvAttribute.array?.length || 0
+                  });
+                      } else {
+                  console.log('⚠️ No UV coordinates found for mesh:', child.name);
+                }
+              }
+              
+              // ✅ DEBUG: KIỂM TRA MATERIAL TỪ GLTF THEO QUY TẮC PBR
+              console.log('🔍 Material debug:', {
+                materialType: child.material.type,
+                hasMap: !!child.material.map,
+                materialName: child.material.name,
+                materialId: child.material.id
+              });
+              
+              // ✅ DEBUG: KIỂM TRA PBR MATERIAL PROPERTIES
+              if (child.material.pbrMetallicRoughness) {
+                console.log('🔍 PBR Material properties:', {
+                  baseColorTexture: child.material.pbrMetallicRoughness.baseColorTexture,
+                  metallicFactor: child.material.pbrMetallicRoughness.metallicFactor,
+                  roughnessFactor: child.material.pbrMetallicRoughness.roughnessFactor
+                });
+              }
+              
+            if (child.material) {
+                // ✅ FORCE MATERIAL UPDATE
+                        child.material.needsUpdate = true;
+                console.log(`🦊 Processing material for mesh: ${child.name}`);
+                
+                // ✅ DEBUG: KIỂM TRA MATERIAL NGAY LẦN ĐẦU
+                console.log('🔍 Material First Load Debug:');
+                console.log('  - Material name:', child.material.name);
+                console.log('  - Material type:', child.material.type);
+                console.log('  - Has map:', !!child.material.map);
+                console.log('  - Material color:', child.material.color);
+                console.log('  - Material emissive:', child.material.emissive);
+                console.log('  - Material emissiveIntensity:', child.material.emissiveIntensity);
+                
+                // ✅ DISABLE FALLBACK COLOR - FORCE TEXTURE USAGE
+                child.material.color.setHex(0xffffff); // Set to white to avoid color interference
+                child.material.emissive.setHex(0x000000); // No emissive color
+                child.material.emissiveIntensity = 0; // No emissive intensity
+                
+                // ✅ FORCE DISABLE ALL FALLBACK COLORS
+                child.material.vertexColors = false; // Disable vertex colors
+                child.material.wireframe = false; // Disable wireframe
+                child.material.transparent = false; // Disable transparency
+                child.material.opacity = 1.0; // Full opacity
+                
+                // ✅ FORCE MATERIAL TO USE TEXTURE ONLY
+                child.material.map = null; // Clear any existing map first
+                    child.material.needsUpdate = true;
+                
+                // ✅ BƯỚC 3: KIỂM TRA TEXTURE TỪ GLTF - TRIỂN KHAI THEO LUỒNG CHUẨN
+                if (child.material.map) {
+                  child.material.map.needsUpdate = true;
+                  console.log('✅ Texture map found and updated for mesh:', child.name);
+                  console.log('🦊 Fox.png texture should be visible!');
+                  
+                  // ✅ LOG TEXTURE INFO
+                  console.log('🦊 Texture info:', {
+                    image: child.material.map.image,
+                    width: child.material.map.image?.width,
+                    height: child.material.map.image?.height,
+                    format: child.material.map.format,
+                    type: child.material.map.type,
+                    wrapS: child.material.map.wrapS,
+                    wrapT: child.material.map.wrapT
+                                });
+              } else {
+                  // ✅ DEBUG: KIỂM TRA TEXTURE LOADING NGAY LẦN ĐẦU
+                  console.log('🔍 Texture First Load Debug:');
+                  console.log('  - No texture map found for mesh:', child.name);
+                  console.log('  - Material has map:', !!child.material.map);
+                  console.log('  - Material needsUpdate:', child.material.needsUpdate);
+                  console.log('⚠️ No texture map found for mesh:', child.name);
+                  console.log('🦊 Attempting to load texture from GLTF structure...');
+                  
+                  // ✅ BƯỚC 4: LOAD TEXTURE TỪ GLTF STRUCTURE - TRIỂN KHAI THEO LUỒNG CHUẨN
+                // ✅ DEBUG: KIỂM TRA GLTF PARSER TEXTURE LOADING
+                console.log('🔍 GLTF Parser Texture Loading Debug:');
+                console.log('  - gltf.textures:', gltf.textures);
+                console.log('  - gltf.images:', gltf.images);
+                console.log('  - gltf.materials:', gltf.materials);
+                
+                // ✅ FORCE LOAD TEXTURE TỪ GLTF PARSER
+                if (gltf.parser && gltf.parser.textureCache) {
+                  console.log('🔍 Force loading texture from GLTF parser...');
+                  const textureCache = gltf.parser.textureCache;
+                  const textureKeys = Object.keys(textureCache);
+                  console.log('  - textureCache keys:', textureKeys);
+                  
+                  if (textureKeys.length > 0) {
+                    const textureKey = textureKeys[0];
+                    const textureData = textureCache[textureKey];
+                    console.log('  - textureData:', textureData);
+                    
+                    if (textureData && textureData._j) {
+                      console.log('  - Found texture in cache, applying...');
+                      child.material.map = textureData._j;
+                      child.material.map.needsUpdate = true;
+                      child.material.needsUpdate = true;
+                      console.log('✅ Texture applied from GLTF parser cache!');
+                    }
+                  }
+                }
+                
+                // ✅ FORCE LOAD TEXTURE TỪ GLTF PARSER JSON
+                if (gltf.parser && gltf.parser.json) {
+                  console.log('🔍 Force loading texture from GLTF parser JSON...');
+                  const json = gltf.parser.json;
+                  console.log('  - JSON materials:', json.materials);
+                  console.log('  - JSON textures:', json.textures);
+                  console.log('  - JSON images:', json.images);
+                  
+                  if (json.materials && json.materials.length > 0) {
+                    const material = json.materials[0];
+                    console.log('  - Material:', material);
+                    
+                    if (material.pbrMetallicRoughness && material.pbrMetallicRoughness.baseColorTexture) {
+                      const textureIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+                      console.log('  - Texture index:', textureIndex);
+                      
+                      if (json.textures && json.textures[textureIndex]) {
+                        const texture = json.textures[textureIndex];
+                        console.log('  - Texture:', texture);
+                        
+                        if (json.images && json.images[texture.source]) {
+                          const image = json.images[texture.source];
+                          console.log('  - Image:', image);
+                          
+                          // ✅ TẠO TEXTURE TỪ GLTF PARSER JSON
+                          console.log('  - Creating texture from GLTF parser JSON...');
+                          const textureFromJSON = new THREE.Texture();
+                          textureFromJSON.needsUpdate = true;
+                          textureFromJSON.wrapS = THREE.RepeatWrapping;
+                          textureFromJSON.wrapT = THREE.RepeatWrapping;
+                          textureFromJSON.flipY = false;
+                          
+                          // ✅ FORCE LOAD IMAGE DATA TỪ GLTF PARSER
+                          console.log('  - Force loading image data from GLTF parser...');
+                          if (gltf.parser && gltf.parser.sourceCache) {
+                            const sourceCache = gltf.parser.sourceCache;
+                            const sourceKeys = Object.keys(sourceCache);
+                            console.log('  - sourceCache keys:', sourceKeys);
+                            
+                            if (sourceKeys.length > 0) {
+                              const sourceKey = sourceKeys[0];
+                              const sourceData = sourceCache[sourceKey];
+                              console.log('  - sourceData:', sourceData);
+                              
+                              if (sourceData && sourceData._j) {
+                                console.log('  - Found image data in source cache, applying...');
+                                textureFromJSON.image = sourceData._j;
+                                textureFromJSON.needsUpdate = true;
+                                console.log('✅ Image data applied from GLTF parser source cache!');
+                              }
+                            }
+                          }
+                          
+                          // ✅ FORCE LOAD IMAGE DATA TỪ GLTF PARSER BUFFER
+                          console.log('  - Force loading image data from GLTF parser buffer...');
+                          if (gltf.parser && gltf.parser.json && gltf.parser.json.buffers) {
+                            const buffers = gltf.parser.json.buffers;
+                            console.log('  - buffers:', buffers);
+                            
+                            if (buffers && buffers.length > 0) {
+                              const buffer = buffers[0];
+                              console.log('  - buffer:', buffer);
+                              
+                              if (buffer.byteLength > 0) {
+                                console.log('  - Found buffer data, creating image...');
+                                const imageData = new Uint8Array(buffer.byteLength);
+                                textureFromJSON.image = imageData;
+                                textureFromJSON.needsUpdate = true;
+                                console.log('✅ Image data created from GLTF parser buffer!');
+                              }
+                            }
+                          }
+                          
+                          // ✅ FORCE LOAD IMAGE DATA TỪ GLTF PARSER EXTENSIONS
+                          console.log('  - Force loading image data from GLTF parser extensions...');
+                          if (gltf.parser && gltf.parser.extensions && gltf.parser.extensions.KHR_binary_glTF) {
+                            const binaryGLTF = gltf.parser.extensions.KHR_binary_glTF;
+                            console.log('  - binaryGLTF:', binaryGLTF);
+                            
+                            if (binaryGLTF.body && binaryGLTF.body.byteLength > 0) {
+                              console.log('  - Found binary GLTF body, creating image...');
+                              const imageData = new Uint8Array(binaryGLTF.body);
+                              textureFromJSON.image = imageData;
+                              textureFromJSON.needsUpdate = true;
+                              console.log('✅ Image data created from GLTF parser binary body!');
+                            }
+                          }
+                          
+                          child.material.map = textureFromJSON;
+                          child.material.needsUpdate = true;
+                          console.log('✅ Texture created from GLTF parser JSON!');
+                        }
+                      }
+                    }
+                  }
+                }
+                
+                            if (gltf.textures && gltf.textures.length > 0) {
+                    console.log('🦊 Found textures in GLTF, applying to material...');
+                    const texture = gltf.textures[0];
+                    
+                                if (texture && texture.image) {
+                      console.log('🦊 Applying texture from GLTF structure...');
+                      
+                      // ✅ FORCE CLEAR MATERIAL COLOR FIRST
+                      child.material.color.setHex(0xffffff);
+                      child.material.emissive.setHex(0x000000);
+                      child.material.emissiveIntensity = 0;
+                      child.material.vertexColors = false;
+                      
+                    child.material.map = texture;
+                      child.material.map.needsUpdate = true;
+                    child.material.needsUpdate = true;
+
+                      // ✅ ENSURE PROPER UV MAPPING SETTINGS
+                                    child.material.map.wrapS = THREE.RepeatWrapping;
+                                    child.material.map.wrapT = THREE.RepeatWrapping;
+                                    child.material.map.flipY = false;
+
+                      console.log('✅ Texture applied with proper UV mapping!');
+          } else {
+                      console.log('⚠️ Texture from GLTF has no image');
+          }
+        } else {
+                    console.log('⚠️ No textures found in GLTF structure');
+                    
+                    // ✅ FORCE LOAD TEXTURE TỪ GLTF STRUCTURE
+                    console.log('🦊 Force loading texture from GLTF structure...');
+                    if (gltf.images && gltf.images.length > 0) {
+                      const image = gltf.images[0];
+                      console.log('🦊 Found image in GLTF:', {
+                        mimeType: image.mimeType,
+                        bufferView: image.bufferView,
+                        hasImage: !!image.image
+                      });
+                      
+                      if (image.image) {
+                        console.log('🦊 Creating texture from GLTF image...');
+                        const texture = new THREE.Texture(image.image);
+                      texture.needsUpdate = true;
+                      texture.wrapS = THREE.RepeatWrapping;
+                      texture.wrapT = THREE.RepeatWrapping;
+                      texture.flipY = false;
+
+                    child.material.map = texture;
+                    child.material.needsUpdate = true;
+                        
+                        console.log('✅ Texture created from GLTF image!');
+                      }
+                    }
+                  }
+                }
+                
+                // ✅ ENABLE NORMAL MAP IF EXISTS
+                if (child.material.normalMap) {
+                  child.material.normalMap.needsUpdate = true;
+                  console.log('✅ Normal map found for mesh:', child.name);
+                }
+                
+                // ✅ ENABLE ROUGHNESS MAP IF EXISTS
+                if (child.material.roughnessMap) {
+                  child.material.roughnessMap.needsUpdate = true;
+                  console.log('✅ Roughness map found for mesh:', child.name);
+                }
+                
+                // ✅ ENABLE METALLIC MAP IF EXISTS
+                if (child.material.metalnessMap) {
+                  child.material.metalnessMap.needsUpdate = true;
+                  console.log('✅ Metallic map found for mesh:', child.name);
+                }
+                
+                console.log('✅ Material updated for mesh:', child.name, {
+                  hasMap: !!child.material.map,
+                  hasNormalMap: !!child.material.normalMap,
+                  hasRoughnessMap: !!child.material.roughnessMap,
+                  hasMetallicMap: !!child.material.metalnessMap
+                });
+                
+                // ✅ LOG COLOR INFO
+                console.log('🦊 Color info:', {
+                  baseColor: child.material.color,
+                  emissive: child.material.emissive,
+                  emissiveIntensity: child.material.emissiveIntensity
+                });
+                              }
+                            }
+                          });
+
+          // ✅ SIMPLE ANIMATION SETUP
+          if (gltf.animations && gltf.animations.length > 0) {
+            console.log('🎬 Setting up animations...');
+            mixerRef.current = new THREE.AnimationMixer(loadedModel);
+            
+            const firstClip = gltf.animations[0];
+            const action = mixerRef.current.clipAction(firstClip);
+            action.play();
+            console.log('✅ Animation setup complete');
+          }
+
+          // ✅ ADD MODEL TO SCENE - SIMPLIFIED
+          console.log('🎯 Adding model to scene...');
+          
+          if (sceneRef.current) {
+            // Clear existing models
+            sceneRef.current.clear();
+            
+            // Add lighting back
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            sceneRef.current.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1);
+            sceneRef.current.add(directionalLight);
+            
+            // Add model to scene
+            sceneRef.current.add(loadedModel);
+            modelRef.current = loadedModel;
+            console.log('🦊 Model added to scene - Fox.png should be visible!');
+            
+            // ✅ DEBUG: KIỂM TRA RENDER NGAY LẦN ĐẦU
+            console.log('🔍 Render First Load Debug:');
+            console.log('  - Model added to scene');
+            console.log('  - Scene children count:', sceneRef.current.children.length);
+            console.log('  - Model position:', loadedModel.position);
+            console.log('  - Model scale:', loadedModel.scale);
+            console.log('  - Model rotation:', loadedModel.rotation);
+            
+            // ✅ APPLY DYNAMIC SCALE SYSTEM
+            console.log('📐 Applying dynamic scale system...');
+            calculateOptimalScale(loadedModel);
+            
+            // ✅ DEBUG TEXTURE LOADING - CHI TIẾT HƠN
+            console.log('🔍 Debugging texture loading...');
+            
+            // ✅ KIỂM TRA NGAY LẬP TỨC SAU KHI LOAD
+            console.log('🦊 === KIỂM TRA TEXTURE NGAY SAU KHI LOAD ===');
+            loadedModel.traverse((child: any) => {
+              if (child.isMesh && child.material) {
+                console.log(`🦊 Mesh: ${child.name}`);
+                console.log(`  - Has texture map:`, !!child.material.map);
+                console.log(`  - Material type:`, child.material.type);
+                console.log(`  - Material color:`, child.material.color);
+                console.log(`  - Material emissive:`, child.material.emissive);
+                
+                if (child.material.map) {
+                  console.log(`  - Texture image:`, child.material.map.image);
+                  console.log(`  - Texture width:`, child.material.map.image?.width);
+                  console.log(`  - Texture height:`, child.material.map.image?.height);
+                }
+              }
+            });
+            
+            debugTextureLoading(loadedModel);
+            
+            // ✅ FORCE FIX TEXTURE - ASYNC
+            console.log('🦊 Force fixing texture from GLB...');
+            forceLoadFoxTexture(loadedModel).then(() => {
+              console.log('✅ Texture fixed successfully!');
+            }).catch(err => {
+              console.error('❌ Failed to fix texture:', err);
+            });
+                  
+                  // ✅ REMOVED OLD TEXTURE LOADING METHODS - USING NEW ASYNC METHOD ONLY
+
+            // ✅ SHOW GESTURE HINT KHI MODEL LOAD XONG
+            console.log('🎯 Showing gesture hint for loaded model');
+            setShowGestureHint(true);
+            console.log('🎯 showGestureHint set to true');
+            
+            // ✅ FORCE RE-RENDER ĐỂ ĐẢM BẢO UI UPDATE
+            setTimeout(() => {
+              console.log('🎯 Force re-render gesture hint');
+              setShowGestureHint(true);
+              console.log('🎯 showGestureHint after force re-render:', true);
+            }, 100);
+            
+            // ✅ SET AUTO-HIDE TIMEOUT SAU KHI MODEL LOAD XONG
+            setTimeout(() => {
+              console.log(`🎯 Auto-hiding gesture hint after 5 seconds`);
+              setShowGestureHint(false);
+                          }, 5000);
+
+            console.log('✅ Model added to scene successfully');
+            console.log('✅ Scene children count:', sceneRef.current.children.length);
+                                  } else {
+            console.error('❌ Scene not available for adding model');
+          }
+          
+        } catch (loadError) {
+          console.error('❌ loadAsync failed:', loadError);
+          throw loadError;
+        }
+        
+        // ✅ COMPLETE LOADING
+        setLoadingProgress(100);
+        setIsLoading(false);
+        setModelInfo(`✅ ${glbConfig.name} loaded successfully!`);
+        
+        console.log('🎉 MODEL LOADING COMPLETE!');
+
+                                } else {
+        // Không tìm thấy model
+        console.warn('⚠️ Unknown Pokemon model ID');
+        setModelInfo('⚠️ Pokemon model không tồn tại');
+
+        Alert.alert(
+          '⚠️ Model không tồn tại',
+          'QR code không chứa Pokemon model hợp lệ. Vui lòng thử QR code khác.',
+          [{ text: 'OK' }]
+        );
+
+        setIsLoading(false);
+      }
+      
+                    } catch (error) {
+      console.error('❌ Error loading Pokemon model:', error);
+      setModelInfo('❌ Lỗi tải Pokemon model');
+      setIsLoading(false);
+    }
+  };
+
+  const onContextCreate = async (gl: any) => {
+    try {
+      // Thiết lập Scene, Camera, Renderer
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(75, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 1000);
+      const renderer = new Renderer({ gl });
+      
+      // ✅ LƯU SCENE VÀO REF
+      sceneRef.current = scene;
+      cameraRef.current = camera;
+      rendererRef.current = renderer;
+      
+      // ✅ Nếu model đã được load trước đó, add vào scene ngay
+      if (modelRef.current) {
+        scene.add(modelRef.current);
+        console.log('🔄 Adding existing model to new scene');
+      }
+      
+      // ✅ SETUP CAMERA - BETTER POSITION FOR FALLBACK MODELS
+      camera.position.set(0, 1.0, 4.0); // ✅ Closer and higher for better visibility
+      camera.lookAt(0, 0, 0); // Nhìn thẳng vào center
+      console.log('🎯 Camera position:', camera.position);
+      renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
+      renderer.setClearColor(0x000000, 0); // Trong suốt để thấy camera
+      // @ts-ignore - alpha property for transparency
+      renderer.alpha = true; // ✅ ENABLE ALPHA CHANNEL
+      
+      // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+      // Sử dụng touch handlers tự implement thay thế
+      console.log('🎮 Using custom touch handlers for React Native compatibility');
+      
+      // ✅ MÀU SẮC CHUẨN SRGB CHO ĐỘ CHÍNH XÁC CAO
+      // @ts-ignore - tương thích nhiều phiên bản three
+      if ((renderer as any).outputColorSpace !== undefined) {
+        // @ts-ignore
+        (renderer as any).outputColorSpace = THREE.SRGBColorSpace;
+                              } else {
+        // @ts-ignore
+        renderer.outputEncoding = THREE.sRGBEncoding;
+      }
+      
+      // ✅ PBR RENDERING CHO MÀU SẮC CHÍNH XÁC
+      // @ts-ignore
+      renderer.physicallyCorrectLights = true;
+      // @ts-ignore
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      // @ts-ignore
+      renderer.toneMappingExposure = 1.2; // Tăng exposure cho màu sắc rõ hơn
+      
+      // ✅ TEXTURE RENDERING SETTINGS
+      // @ts-ignore
+      renderer.antialias = true;
+      // @ts-ignore
+      renderer.preserveDrawingBuffer = true;
+      // @ts-ignore
+      renderer.powerPreference = 'high-performance';
+      
+      // ✅ SHADOW SETTINGS CHO CHI TIẾT
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      // ✅ REFERENCES ĐÃ ĐƯỢC LƯU Ở TRÊN
+
+        // ✅ ÁNH SÁNG TỐI ƯU CHO MÀU ĐỎ SCIZOR
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); // Tăng ambient cho màu đỏ
+        scene.add(ambientLight);
+
+      // ✅ DIRECTIONAL LIGHT CHÍNH - CHIẾU SÁNG MẠNH CHO MÀU ĐỎ
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5); // Tăng cường độ cho màu đỏ
+      directionalLight.position.set(2, 5, 3);
+      directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
+      scene.add(directionalLight);
+
+      // ✅ ÁNH SÁNG BỔ SUNG CHO MÀU SẮC RÕ RÀNG
+      const leftLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      leftLight.position.set(-4, 3, 3);
+      scene.add(leftLight);
+
+      const rightLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      rightLight.position.set(4, 3, 3);
+      scene.add(rightLight);
+      
+      // ✅ POINT LIGHT CHO CHI TIẾT
+      const pointLight = new THREE.PointLight(0xffffff, 0.8, 30);
+      pointLight.position.set(0, 3, 4);
+      scene.add(pointLight);
+      
+      // ✅ RIM LIGHT CHO WINGS
+      const rimLight = new THREE.DirectionalLight(0x88ccff, 0.5);
+      rimLight.position.set(0, 0, -5);
+      scene.add(rimLight);
+
+      // ✅ ANIMATION LOOP - TỐI ƯU HIỆU SUẤT!
+      const animate = () => {
+        timeoutRef.current = setTimeout(animate, 1000 / 30); // ✅ GIẢM XUỐNG 30 FPS CHO HIỆU SUẤT
+
+        // ✅ ORBITCONTROLS KHÔNG TƯƠNG THÍCH VỚI REACT NATIVE
+
+        // ✅ UPDATE ANIMATION MIXER
+        const delta = clockRef.current.getDelta();
+        if (mixerRef.current) {
+          mixerRef.current.update(delta);
+        }
+
+        if (modelRef.current) {
+          const time = Date.now() * 0.001;
+
+                // ✅ DEBUG: Log model info occasionally (MINIMAL LOGS)
+                if (Math.floor(time) % 120 === 0 && Math.floor(time * 10) % 10 === 0) {
+                  // ✅ LOG TEXTURE RENDERING STATUS (MINIMAL)
+                  modelRef.current.traverse((child: any) => {
+                              if (child.isMesh && child.material) {
+                      if (!child.material.map && modelRef.current) {
+                        console.log('🦊 No texture - force loading...');
+                        forceLoadFoxTexture(modelRef.current).catch(err => {
+                          console.error('Failed to load Fox texture in loop:', err);
+                        });
+                        
+                        // ✅ DEBUG: KIỂM TRA ANIMATION LOOP NGAY LẦN ĐẦU
+                        console.log('🔍 Animation Loop First Load Debug:');
+                        console.log('  - No texture map found in animation loop');
+                        console.log('  - Material name:', child.material.name);
+                        console.log('  - Material type:', child.material.type);
+                        console.log('  - Material color:', child.material.color.getHex());
+                        console.log('  - Material emissive:', child.material.emissive.getHex());
+                        console.log('  - Material emissiveIntensity:', child.material.emissiveIntensity);
+                                  }
+                                }
+                              });
+                }
+
+          // Update AnimationMixer nếu có
+          if ((modelRef.current as any).updateMixer) {
+            (modelRef.current as any).updateMixer(delta);
+          }
+          
+          // ✅ BREATHING ANIMATION - TỐI ƯU!
+          if ((modelRef.current as any).animate) {
+            (modelRef.current as any).animate();
+                            } else {
+            // ✅ MODEL HOÀN TOÀN TĨNH - ĐỂ USER TRẢI NGHIỆM CỬ CHỈ TỰ NHIÊN
+            // Breathing effect đã tắt để model đứng yên hoàn toàn
+          }
+          
+          // ✅ MODEL ĐỨNG YÊN BAN ĐẦU - ĐỂ USER TRẢI NGHIỆM CỬ CHỈ TỰ NHIÊN
+          // Auto-rotation đã tắt để user có thể khám phá cử chỉ một cách tự nhiên
+          
+          // ✅ ĐẢM BẢO MODEL LUÔN TRONG TẦM NHÌN
+          const modelPosition = modelRef.current.position;
+          const cameraPosition = camera.position;
+          const distance = Math.sqrt(
+            Math.pow(modelPosition.x - cameraPosition.x, 2) +
+            Math.pow(modelPosition.y - cameraPosition.y, 2) +
+            Math.pow(modelPosition.z - cameraPosition.z, 2)
+          );
+          
+          // Nếu model quá xa, đưa về gần camera
+          if (distance > 5) {
+            modelRef.current.position.set(0, 0, 0);
+          }
+        }
+
+        renderer.render(scene, camera);
+        gl.endFrameEXP();
+      };
+
+      animate();
+      console.log('🎬 3D Scene initialized successfully!');
+
+    } catch (error) {
+      console.error('Error creating 3D context:', error);
+              setIsLoading(false);
+            }
+  };
+
+  if (hasPermission === null) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>Đang yêu cầu quyền truy cập camera...</Text>
+      </View>
+    );
+  }
+
+  if (hasPermission === false) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>❌ Không có quyền truy cập camera</Text>
+        <View style={styles.button} onTouchEnd={onClose}>
+          <Text style={styles.buttonText}>Quay lại</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <GestureHandlerRootView style={styles.container}>
+      {/* Camera làm background */}
+      <CameraView
+        style={styles.camera}
+        facing="back"
+        onBarcodeScanned={scannedData ? undefined : handleBarCodeScanned}
+        barcodeScannerSettings={{
+          barcodeTypes: ['qr', 'pdf417'],
+        }}
+        pointerEvents="none"
+      />
+
+      {/* ✅ SEPARATE GLVIEW AND PANRESPONDER - XỬ LÝ CỬ CHỈ LIÊN TỤC */}
+      {/* ✅ GLVIEW RIÊNG BIỆT - KHÔNG CHẶN TOUCH EVENTS */}
+        <GLView
+          style={styles.glView}
+          onContextCreate={onContextCreate}
+        pointerEvents="none"
+      />
+
+      {/* ✅ PANRESPONDER RIÊNG BIỆT - XỬ LÝ CỬ CHỈ LIÊN TỤC */}
+      <View
+        style={styles.touchWrapper}
+        {...panResponder.panHandlers}
+        onLayout={(evt) => {
+          console.log('🎮 PanResponder layout:', evt.nativeEvent.layout);
+          console.log('🎮 PanResponder zIndex: 1001, elevation: 1001');
+        }}
+      />
+
+      {/* Loading Overlay */}
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color="#FFD700" />
+            <Text style={styles.loadingText}>{modelInfo}</Text>
+
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBar, { width: `${loadingProgress}%` }]} />
+            </View>
+            <Text style={styles.progressText}>{loadingProgress}%</Text>
+
+            <Text style={styles.systemInfo}>🎮 Pokemon AR System</Text>
+          </View>
+        </View>
+      )}
+
+      {/* UI Controls */}
+      <View style={styles.overlay}>
+        {/* ✅ FIX: UI NHẤT QUÁN - THAY ĐỔI THEO TRẠNG THÁI */}
+        {!scannedData ? (
+          <Text style={styles.instruction}>
+            📱 Quét QR code để hiển thị Pokemon 3D
+          </Text>
+        ) : (
+          <View>
+            <Text style={styles.instruction}>
+              🦂 {modelInfo || 'Pokemon đã sẵn sàng!'}
+            </Text>
+            {/* ✅ TC6.1: ANIMATION FEEDBACK UI */}
+            {animationFeedback && (
+              <Text style={styles.animationFeedback}>
+                {animationFeedback}
+              </Text>
+            )}
+          </View>
+        )}
+
+        {/* ✅ REMOVED INSTRUCTION TEXT AS REQUESTED */}
+
+        {/* ✅ CHỈ HIỆN KHI ĐANG LOADING ĐỂ TRÁNH RỐI UI */}
+        {scannedData && isLoading && (
+          <Text style={styles.scannedData}>
+            🔍 Đã quét: {scannedData}
+          </Text>
+        )}
+
+        {/* ✅ GESTURE HINT - HƯỚNG DẪN TƯƠNG TÁC */}
+        {scannedData && !isLoading && showGestureHint && (
+          <View style={styles.gestureHint}>
+            <Text style={styles.gestureHintText}>
+              👆 Vuốt để xoay • 🤏 Chụm để zoom
+            </Text>
+          </View>
+        )}
+
+
+
+        <View
+          style={styles.closeButton}
+          onTouchEnd={onClose}
+        >
+          <Text style={styles.closeText}>❌ Đóng</Text>
+        </View>
+      </View>
+    </GestureHandlerRootView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  glContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    pointerEvents: 'box-none',
+  },
+  touchWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1001, // ✅ CAO HƠN GESTURE HINT VÀ DEBUG INFO
+    backgroundColor: 'transparent',
+    elevation: 1001, // Android elevation
+  },
+  glView: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+    zIndex: 1000, // ✅ UI ELEMENTS LUÔN Ở TRÊN 3D MODEL
+    alignItems: 'center',
+    // ✅ TC6.2: ADAPTIVE PADDING FOR DIFFERENT DEVICES
+    paddingTop: Platform.OS === 'ios' ? (Dimensions.get('window').height > 800 ? 60 : 40) : 30,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 30,
+    paddingHorizontal: 20,
+  },
+  instruction: {
+    color: '#fff',
+    // ✅ TC6.2: RESPONSIVE FONT SIZE
+    fontSize: Dimensions.get('window').width < 375 ? 16 : 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)', // ✅ TĂNG OPACITY CHO RÕ RÀNG
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)', // ✅ VIỀN TRẮNG NHẸ
+    // ✅ TC6.2: ENSURE VISIBILITY ON ALL DEVICES
+    maxWidth: Dimensions.get('window').width - 40,
+  },
+  subInstruction: {
+    color: '#fff',
+    fontSize: 14,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  scannedData: {
+    color: '#FFD700',
+    fontSize: 12,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 15,
+    paddingVertical: 5,
+    borderRadius: 15,
+    marginTop: 5,
+  },
+  closeButton: {
+    backgroundColor: 'rgba(255,0,0,0.7)',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    marginBottom: 20,
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  // ✅ TC6.1: ANIMATION FEEDBACK STYLES
+  animationFeedback: {
+    color: '#FFD700',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 10,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+  },
+  loadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  loadingCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    padding: 30,
+    borderRadius: 20,
+    alignItems: 'center',
+    minWidth: 280,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  loadingText: {
+    color: '#333',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 15,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  progressBarContainer: {
+    width: 200,
+    height: 6,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#FFD700',
+    borderRadius: 3,
+  },
+  progressText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 10,
+  },
+  systemInfo: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  button: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    marginTop: 20,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  text: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  // ✅ GESTURE HINT STYLES
+  gestureHint: {
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    zIndex: 1000,
+    pointerEvents: 'none',
+  },
+  gestureHintText: {
+    color: '#FFD700',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  // ✅ DEBUG STYLES
+  debugInfo: {
+    backgroundColor: 'rgba(255,0,0,0.8)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    marginTop: 10,
+    zIndex: 1000,
+    pointerEvents: 'none',
+  },
+  debugText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+});
+
+export default PokemonARViewer;
